@@ -1,0 +1,206 @@
+#app-status:not([hidden]) {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-content: center;
+  padding: 32px;
+  background: #f6f3e6;
+  color: #1a30c0;
+  font: 20px/1.5 var(--font-ui);
+}
+#app-status pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 900px;
+  color: #d02030;
+}
+button:focus-visible,
+input:focus-visible,
+summary:focus-visible {
+  outline: 3px solid #d02030;
+  outline-offset: 4px;
+}
+.screen {
+  overflow-y: auto;
+  cursor: default;
+  padding: 24px;
+  box-sizing: border-box;
+}
+.panel {
+  max-height: calc(100dvh - 90px);
+  overflow-y: auto;
+}
+.panel details {
+  margin-top: 16px;
+}
+.panel summary {
+  cursor: pointer;
+  font-size: 24px;
+}
+.panel .mainbtns {
+  justify-content: center;
+}
+.panel .mainbtns button {
+  flex: 0 1 auto;
+}
+#hud.nogame .scope,
+#hud.nogame .focus-meter,
+#hud.nogame .focus-mark,
+#hud.nogame .gstam,
+#hud.nogame .message,
+#hud.nogame .tip,
+#hud.nogame .bossbar {
+  display: none;
+}
+@media (max-width: 700px) {
+  .panel {
+    padding: 22px 18px;
+  }
+  .panel h1 {
+    font-size: 48px;
+  }
+  .panel h2 {
+    font-size: 25px;
+  }
+  .panel .mainbtns button.start {
+    min-width: 0;
+    width: 100%;
+    font-size: 40px;
+  }
+  .panel .cols {
+    flex-direction: column;
+    gap: 20px;
+    font-size: 18px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel .go {
+    animation: none;
+  }
+}
+
+.shooter-menu {
+  color: var(--ink);
+}
+
+/* Keep handwriting for display text; controls and live data use the UI face. */
+.panel h1,
+.panel h2,
+.panel .mainbtns button,
+.msg-main,
+.weapon {
+  font-family: var(--font-hand);
+  font-weight: 400;
+}
+.panel .mainbtns button i {
+  font-family: var(--font-ui);
+}
+
+/* Chinese glyphs need more leading than the original Latin handwriting. */
+.panel h1 {
+  line-height: 1.2;
+}
+.panel h2 {
+  line-height: 1.45;
+}
+.panel .cols {
+  line-height: 1.65;
+}
+
+.online-panel {
+  width: min(740px, 100%);
+  box-sizing: border-box;
+}
+.online-panel h1 {
+  font-size: clamp(32px, 6vw, 60px);
+}
+.online-panel h2 {
+  font-size: 25px;
+}
+.online-panel p {
+  font-size: 20px;
+  line-height: 1.6;
+}
+.online-field {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  margin: 18px 0;
+  font-size: 23px;
+}
+.online-field input {
+  font: inherit;
+  color: var(--ink);
+  background: #fffdf4;
+  border: 2px solid var(--ink);
+  border-radius: 7px;
+  padding: 8px;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.online-panel button {
+  font: inherit;
+  font-size: 22px;
+  color: var(--ink);
+  background: #fffdf4;
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  padding: 10px 16px;
+  cursor: pointer;
+}
+.online-panel button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.online-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin: 16px 0;
+}
+.public-slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+.online-scores {
+  width: 100%;
+  font-size: 22px;
+  border-collapse: collapse;
+  margin: 14px 0;
+}
+.online-scores td,
+.online-scores th {
+  padding: 8px;
+  border-bottom: 1px solid #2337be44;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.room-code strong {
+  font-family: monospace;
+  letter-spacing: 4px;
+}
+.online-error {
+  color: var(--red);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#hud.online .hud-tl,
+#hud.online .focus-meter {
+  display: none;
+}
+.pvpscore {
+  line-height: 1.6;
+  background: #faf8eed9;
+  border-radius: 6px;
+  padding: 4px 10px;
+}
+.board {
+  line-height: 1.6;
+}

@@ -1,0 +1,87 @@
+# Doodle Game
+
+基于本地 `doodleshooter` 复刻的模块化游戏项目。当前提供 **Doodle District 单人生存射击与联机自由混战**，React 管理菜单与设置，Three.js 管理游戏场景与实时循环。
+
+## 运行
+
+需要 Node.js 20.15+、npm，以及支持 WebGL 2、浮点渲染目标、Web Audio 和 Pointer Lock 的桌面浏览器。
+
+```sh
+npm ci
+npm run dev
+```
+
+默认地址：`http://127.0.0.1:5173`。端口占用会直接报错；显式换端口：
+
+```sh
+npm run dev -- --port 5180
+```
+
+开发服务默认监听局域网地址，同一网络中的设备可访问 `http://<运行电脑的局域网 IP>:5173/`；换端口后网址也需使用对应端口。终端的 `Network` 行会显示可用地址。只允许本机访问时，运行 `npm run dev -- --host 127.0.0.1`。
+
+第一人称鼠标操作应在普通浏览器窗口中运行。部分嵌入式或自动化浏览器会拒绝 Pointer Lock，页面会显示原始原因并等待用户重新点击，不会自动重试或假装捕获成功。
+
+## 第一版范围
+
+- 保留笔记本横线、蓝色手绘线稿、轮廓、排线及程序化音效。
+- Rifle、Shotgun、Sniper、Katana；射击、装弹、开镜、格挡与弹反。
+- 跳跃、二段跳、蹬墙跳、滑铲、空中冲刺、钩索与蓄力手雷。
+- 7 种普通敌人、3 种轮换 Boss、波次、连击、补给与检查点。
+- React 开始、暂停、死亡菜单；设置、操作说明；独立的实时 HUD。
+
+原仓库的 Mexico 地图在源码中标记为未就绪。保留其独立构建模块，但第一版菜单及存档校验只开放 District。已接入私人/公开房间和最多 10 人 PVP 自由混战；其它玩法与移动端触屏操作尚未开放。联机运行方法见 [联机说明](docs/multiplayer.md)。
+
+## 工程结构
+
+```text
+src/
+  app/                  # React 应用挂载、玩法入口、致命错误呈现
+  games/shooter/
+    index.js            # 会话装配、状态转换、帧循环、卸载
+    preferences.js      # 射击玩法的存档版本、字段及校验
+    ui/                 # React 菜单/房间/设置/操作说明；独立 DOM HUD
+    online/             # 连接、协议校验、房主裁定、远端人物与游戏接入
+    systems/            # 波次与积分、专注斩、补给与可破坏物
+    enemies/            # 类型配置、模型、弹道、AI 与生命周期
+    weapons/            # 共用持枪动画、枪械、武士刀
+    levels/             # 共用几何构建、District、未开放的 Mexico
+    level.js            # 地图分发与校验
+    player.js           # 玩家移动、相机、钩索和手雷
+    physics.js          # 碰撞与射线
+    nav.js              # 导航网格与寻路
+    render.js           # 墨水材质及后处理
+    effects.js          # 粒子、弹痕与碎片
+    audio.js            # 程序化音效与音乐
+  shared/resources.js   # Three.js 子树资源释放
+tests/shooter.test.js   # 原生 Node 回归检查
+```
+
+React 只接收菜单状态变化，不接收每帧坐标或弹药更新。实时 HUD 和游戏循环由射击会话独立维护。新增玩法在 `src/games/<玩法>/` 建立独立目录，再从应用入口接入；出现第二个实际使用者后再提取共用模块。详见 [模块边界](docs/architecture.md)。
+
+## 验证与构建
+
+```sh
+npm run check         # 静态检查 + 核心回归 + 格式检查 + 生产构建
+npm run format        # 统一格式
+npm run build
+npm run preview       # 预览 dist，默认 4173
+```
+
+锁文件使用公开 npm 源；依赖和字体均本地打包，单机运行不访问 CDN；联机按配置连接 PeerJS 信令服务。`dist/` 可放在普通静态服务器或子目录下。仓库自带 GitHub Actions 检查工作流。
+
+实际检查结果和浏览器验证边界见 [验证记录](docs/verification.md)。
+
+## 错误约定
+
+- 只有存档键不存在时使用初始值。损坏 JSON、非法值、未知地图、写入失败都会明确报错，保留原数据。
+- 鼠标捕获失败在当前菜单显示原因；没有无限重试，也没有降级到另一套输入方式。
+- 致命异常、未处理的异步失败、着色器错误或 WebGL 上下文丢失停止会话并显示错误；控制台保留异常。
+- 物理时间步、非有限位置/速度、伤害和武器编号在对应入口校验。
+- 重开清理装弹、泵动、格挡、连击、相机弹簧、手雷、补给和敌人状态；卸载释放帧循环、监听器、音频及场景资源。
+- 初始值、碰撞边界、正常落空及容量限制属于明确的游戏规则，不用它们替换非法数据或隐藏异常。
+
+## 来源
+
+标题、主按钮与武器名称使用 [霞鹜文楷屏幕阅读版](https://github.com/lxgw/LxgwWenKai-Screen)（简体字形）；说明、表单与战斗数据使用系统黑体。通过锁定版本的 `lxgw-wenkai-screen-webfont` 引入单套 WOFF2 分片，浏览器按用字加载，字体随构建部署，不依赖外部字体服务。字体与 Webfont 打包许可保留在 [字体许可](public/licenses/lxgw-wenkai-screen.txt)，构建时一并复制到 `dist/licenses/`。
+
+玩法、程序化美术和音效移植自用户提供的本地 `/Users/wuqingfu/Desktop/ifor/doodleshooter`，参考提交 `faf3e906f87e384639f2d9ab8b1568280d57c889`。原目录未修改。本项目保留原作的核心手感，界面和游戏提示使用简体中文，并补充工程组织、React 界面、清理逻辑和验证。
