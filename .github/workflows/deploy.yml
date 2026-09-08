@@ -11,6 +11,8 @@ on:
       - 'vite.config.js'
       - 'public/**'
       - 'docs/**'
+      - 'Dockerfile'
+      - '.github/workflows/deploy.yml'
       - '!README.md'
   workflow_dispatch:
 
