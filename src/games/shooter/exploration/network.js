@@ -1,15 +1,17 @@
 import { sceneOf } from './region.js';
 import { requireWorld, validAddress } from './schema.js';
+import { validCharacterInk } from '../colors.js';
 
-export function validateActor(p) {
+export function validateActor(p, info) {
   requireWorld(
     p && typeof p.id === 'string' && p.id.length <= 100 && typeof p.name === 'string' && p.name.length <= 14,
     '玩家身份无效',
   );
   validAddress(p.pos);
+  requireWorld(p.ink === undefined || validCharacterInk(p.ink), '玩家颜色无效');
   if (p.sceneId !== undefined)
     requireWorld(
-      p.sceneId === sceneOf(p.pos) && Number.isSafeInteger(p.epoch) && p.epoch >= 0,
+      p.sceneId === sceneOf(p.pos, info) && Number.isSafeInteger(p.epoch) && p.epoch >= 0,
       '玩家场景无效',
     );
   requireWorld(

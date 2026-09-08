@@ -1,4 +1,5 @@
 import { requireWorld, validateLayout } from './schema.js';
+import { dynamicScene } from './interiors.js';
 
 // Archived template version 1: keep these dimensions and expansion rules immutable; add a new version for future geometry changes.
 export const TEMPLATE_VERSION = 1;
@@ -32,7 +33,8 @@ export const outdoors = (x, z) =>
   Number.isInteger(x) && Number.isInteger(z) && x >= 0 && x < 2 && z >= 0 && z < 2;
 export const buildingAt = (x, z) => PLOTS.find((b) => b.sceneX === x && b.sceneZ === z);
 export const buildingById = (id) => PLOTS.find((b) => b.id === id);
-export const sceneOf = (p) => buildingAt(p.cx, p.cz)?.id ?? 'outdoor';
+export const sceneOf = (p, info) =>
+  info?.schemaVersion === 1 ? dynamicScene(p) : (buildingAt(p.cx, p.cz)?.id ?? 'outdoor');
 export const doorPosition = (b) => ({ cx: b.cx, cz: b.cz, x: b.x, y: 0, z: b.z - b.d / 2 - 5 });
 export const entryPosition = (b) => ({ cx: b.sceneX, cz: b.sceneZ, x: 64, y: 0, z: 64 - b.d / 2 + 3 });
 const cleanText = (value, max = 60) => {

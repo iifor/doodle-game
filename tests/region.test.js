@@ -1,3 +1,5 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
@@ -27,7 +29,7 @@ import { validateActor } from '../src/games/shooter/exploration/network.js';
 import { disposeTree } from '../src/shared/resources.js';
 
 async function setup(t, generate = async ({ design }) => structuredClone(design.example)) {
-  const directory = await mkdtemp('/private/tmp/doodle-region-test-');
+  const directory = await mkdtemp(join(tmpdir(), 'doodle-region-test-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new WorldStore(directory, generate);
   const info = await store.create('小区域测试', 2);
@@ -107,6 +109,13 @@ test('V2 persists themes, deduplicates all generation layers, bounds the region 
   const before = calls;
   await assert.rejects(store.ensure(info.id, -1, 0, 'host'), /边界/);
   assert.equal(calls, before);
+  await assert.rejects(
+    store.update(info.id, 'host', {
+      revision: 0,
+      run: { buildingId: 'building-7', runId: 1, total: 1, defeated: [0], rewarded: true },
+    }),
+    /总数/,
+  );
   let progress = await store.update(info.id, 'host', {
     revision: 0,
     run: { buildingId: 'building-7', runId: 1, defeated: [0, 1, 2, 3], rewarded: true },
@@ -344,10 +353,11 @@ test('interior and outdoor rendering, collision and unloading stay bounded acros
     chunks.remove('8,0');
     chunks.remove('0,0');
     chunks.rebuild();
-    assert.equal(ctx.scene.children.length, 0);
+    assert.equal(ctx.scene.children.length, 1); // Shared paper ground lives until Chunks.dispose().
     assert.equal(ctx.world.boxes.length, 0);
   }
   chunks.dispose();
+  assert.equal(ctx.scene.children.length, 0);
 });
 
 test('real player keeps weapon state across doors; separated outdoor and warehouse enemies target only their own players', async () => {

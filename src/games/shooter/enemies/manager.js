@@ -7,6 +7,7 @@ import { disposeTree } from '../../../shared/resources.js';
 import { TYPES } from './types.js';
 import { buildHumanoid, buildBomber, buildFlyer } from './models.js';
 import { Projectiles } from './projectiles.js';
+import { enemyInk } from '../colors.js';
 const _v = new THREE.Vector3(),
   _v2 = new THREE.Vector3(),
   _v3 = new THREE.Vector3(),
@@ -80,7 +81,8 @@ export class EnemyManager {
   }
   spawn(type, pos, id = null) {
     if (!Object.hasOwn(TYPES, type)) throw new Error(`Unknown enemy type: ${type}`);
-    const T = TYPES[type];
+    const enemyId = id ?? this.nextId++;
+    const T = { ...TYPES[type], ink: TYPES[type].ink ?? enemyInk(enemyId) };
     const ink = T.ink ?? INK.RED;
     const mat = makeInkMaterial({ ink, shadeScale: 0, shadeBias: 1 });
     const solid = makeInkMaterial({
@@ -153,7 +155,7 @@ export class EnemyManager {
       bossAtk: null,
       rootDetached: false,
     };
-    e.id = id ?? this.nextId++;
+    e.id = enemyId;
     this.byId.set(e.id, e);
     e.body.alwaysStep = true;
     if (T.flying) e.body.noSnap = true;
@@ -290,7 +292,7 @@ export class EnemyManager {
     const dir = info.dir || _d.set(0, 1, 0);
     const amt = clamp(0.5 + amount / 70, 0.5, 2.2) * (e.T.boss ? 1.6 : 1);
     this.ctx.effects.blood(info.point || e.center, dir, amt, {
-      ink: e.T.ink === INK.BLACK ? INK.BLACK : INK.RED,
+      ink: e.T.ink,
     });
     if (info.crit) audio.headshot(e.center);
     else audio.hitEnemy(e.center);
@@ -334,7 +336,7 @@ export class EnemyManager {
     this._removeLaser(e);
     const eff = this.ctx.effects,
       scene = this.ctx.scene;
-    const inkC = e.T.ink === INK.BLACK ? INK.BLACK : INK.RED;
+    const inkC = e.T.ink;
     if (e.face) {
       e.face.eyes.visible = false;
       e.face.xeyes.visible = true;
@@ -1311,7 +1313,7 @@ export class EnemyManager {
     _d.y += rand(-sp, sp);
     _d.z += rand(-sp, sp);
     _d.normalize();
-    this.projectiles.fire(muzzle, _d, speed, dmg * this.mods.damage, e, INK.RED, thick);
+    this.projectiles.fire(muzzle, _d, speed, dmg * this.mods.damage, e, e.T.ink, thick);
     this.ctx.effects.strokeBurst(muzzle, INK.ORANGE, 4, 4, { life: 0.07, size: 0.03 });
   }
   _animateFlyer(e, dt) {

@@ -117,7 +117,7 @@ export class Multiplayer {
       if (p.id === this.room.net.id) continue;
       let r = this.remotes.get(p.id);
       if (!r) {
-        r = new RemotePlayer(this.ctx, p.id, p.name, 0, INK.RED);
+        r = new RemotePlayer(this.ctx, p.id, p.name, 0, p.ink ?? INK.RED);
         this.remotes.set(p.id, r);
       }
       r.push(p.snap, performance.now() / 1000);

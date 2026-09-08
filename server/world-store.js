@@ -1,4 +1,12 @@
 import {
+  enterableBuildings,
+  parseInteriorId,
+  validateInteriorPlan,
+  interiorExample,
+  expandHouse,
+  validateHouseBlock,
+} from '../src/games/shooter/exploration/interiors.js';
+import {
   validateWorldLayout,
   validateTheme,
   validateVariation,
@@ -15,13 +23,16 @@ import {
 import { mkdir, readFile, readdir, open, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { randomizeEncounter } from '../src/games/shooter/exploration/encounters.js';
 import {
   SCHEMA,
   GENERATOR,
   coordinates,
   campLayout,
   validateLayout,
+  validateGeneratedLayout,
   validateProgress,
+  outpostComplete,
   validAddress,
   checksum,
   requireWorld,
@@ -98,8 +109,9 @@ export class WorldStore {
     if (info.schemaVersion === 2) validateTheme(info.region);
     return info;
   }
-  async create(name, version = 1) {
+  async create(name, version = 1, aiGenerated = false) {
     requireWorld([1, 2].includes(version), '世界版本无效');
+    requireWorld(typeof aiGenerated === 'boolean' && (!aiGenerated || version === 1), '生成模式无效');
     requireWorld(
       typeof name === 'string' &&
         name.trim().length > 0 &&
@@ -116,6 +128,8 @@ export class WorldStore {
       schemaVersion: version,
       generatorVersion: GENERATOR,
       createdAt: new Date().toISOString(),
+      ...(aiGenerated ? { aiGenerated: true } : {}),
+      ...(aiGenerated ? { encounterVersion: 1 } : {}),
     };
     let layout;
     if (version === 2) {
@@ -128,6 +142,9 @@ export class WorldStore {
       info.region = validateTheme(theme);
       const design = await this.streetDesign(info, 0, 0);
       layout = expandStreet(design, 0, 0);
+    } else if (aiGenerated) {
+      layout = await this.slot(() => this.generate({ seed, x: 0, z: 0, neighbors: [] }));
+      layout = validateGeneratedLayout(layout, seed, 0, 0);
     } else layout = campLayout(seed);
     await atomicWrite(this.path(id, 'chunks', '0,0.json'), {
       x: 0,
@@ -185,7 +202,7 @@ export class WorldStore {
             state.runId > 0,
           '挑战存档无效',
         );
-        validateProgress(state);
+        validateProgress(state, 4);
       }
     validAddress(p.safePosition);
     for (const [key, state] of Object.entries(p.chunks)) {
@@ -195,7 +212,7 @@ export class WorldStore {
       if (state.safePosition) {
         validAddress(state.safePosition);
         requireWorld(
-          state.defeated.length === 4 && coordinates(state.safePosition.cx, state.safePosition.cz) === key,
+          outpostComplete(state) && coordinates(state.safePosition.cx, state.safePosition.cz) === key,
           '安全据点存档无效',
         );
       }
@@ -248,12 +265,13 @@ export class WorldStore {
       try {
         this.requireLease(id, owner);
         requireWorld(!(await this.progress(id)).generationPaused, '新区域生成已暂停');
-        const layout = validateLayout(
+        let layout = validateLayout(
           await this.generate({ seed: info.seed, x, z, neighbors }),
           info.seed,
           x,
           z,
         );
+        if (info.encounterVersion === 1) layout = randomizeEncounter(layout, info.seed, x, z);
         this.requireLease(id, owner);
         const block = { x, z, layout, checksum: await checksum(layout) };
         await atomicWrite(this.path(id, 'chunks', `${coordinates(x, z)}.json`), block);
@@ -266,6 +284,39 @@ export class WorldStore {
     };
     const promise = work().finally(() => this.jobs.delete(key));
     this.jobs.set(key, promise);
+    return promise;
+  }
+  async prepareEncounters(id, owner) {
+    this.requireLease(id, owner);
+    const info = await this.info(id);
+    if (info.schemaVersion !== 1 || info.encounterVersion === 1) return info;
+    const jobKey = `${id}:encounter-upgrade`;
+    if (this.jobs.has(jobKey)) return this.jobs.get(jobKey);
+    const work = async () => {
+      const progress = await this.progress(id);
+      for (const key of await this.manifest(id)) {
+        if (progress.chunks[key]) continue; // Never change an in-progress or completed fight.
+        const [x, z] = key.split(',').map(Number),
+          block = await this.chunk(id, x, z);
+        if (!block.layout.outpost || block.layout.outpost.encounterVersion === 1) continue;
+        const layout = randomizeEncounter(block.layout, info.seed, x, z);
+        this.requireLease(id, owner);
+        // Keep the exact original for an interrupted upgrade or a manual rollback.
+        await atomicWrite(this.path(id, 'encounter-backups', `${key}.json`), block);
+        await atomicWrite(this.path(id, 'chunks', `${key}.json`), {
+          x,
+          z,
+          layout,
+          checksum: await checksum(layout),
+        });
+      }
+      this.requireLease(id, owner);
+      const updated = { ...info, encounterVersion: 1 };
+      await atomicWrite(this.path(id, 'world.json'), updated);
+      return updated;
+    };
+    const promise = work().finally(() => this.jobs.delete(jobKey));
+    this.jobs.set(jobKey, promise);
     return promise;
   }
   async slot(work, priority = false, jobKey) {
@@ -383,9 +434,60 @@ export class WorldStore {
     return promise;
   }
   async interior(id, buildingId, owner, priority = false) {
+    this.requireLease(id, owner);
+    if ((await this.info(id)).schemaVersion === 1) return this.ensureHouse(id, buildingId, owner, priority);
     const b = buildingById(buildingId);
     requireWorld(b && (await this.info(id)).schemaVersion === 2, '建筑编号无效');
     return this.ensureRegion(id, b.sceneX, b.sceneZ, owner, priority);
+  }
+  async ensureHouse(id, buildingId, owner, priority = false) {
+    const { x, z } = parseInteriorId(buildingId);
+    const key = `${id}:${buildingId}`;
+    if (this.jobs.has(key)) return this.jobs.get(key);
+    const work = async () => {
+      const exterior = await this.chunk(id, x, z);
+      const building = enterableBuildings(exterior).find((b) => b.id === buildingId);
+      requireWorld(building, '这栋建筑没有可进入的门');
+      const file = this.path(id, 'interiors', `${buildingId}.json`);
+      try {
+        const cached = await validateHouseBlock(await readJSON(file));
+        requireWorld(
+          cached.layout.buildingId === buildingId &&
+            JSON.stringify(cached.layout.exteriorDoor) === JSON.stringify(building.door),
+          '建筑外观与室内缓存不匹配',
+        );
+        return cached;
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+      return this.slot(
+        async () => {
+          this.requireLease(id, owner);
+          requireWorld(!(await this.progress(id)).generationPaused, '新区域生成已暂停；已缓存的室内仍可进入');
+          const plan = validateInteriorPlan(
+            await this.generate({
+              design: {
+                kind: 'house',
+                context: { district: exterior.layout.name, building },
+                example: interiorExample,
+              },
+              validate: validateInteriorPlan,
+            }),
+          );
+          this.requireLease(id, owner);
+          const layout = expandHouse(plan, building);
+          const block = { x, z, layout, checksum: await checksum(layout) };
+          await validateHouseBlock(block);
+          await atomicWrite(file, block);
+          return block;
+        },
+        priority,
+        key,
+      );
+    };
+    const promise = work().finally(() => this.jobs.delete(key));
+    this.jobs.set(key, promise);
+    return promise;
   }
   update(id, owner, patch) {
     const previous = this.writes.get(id) ?? Promise.resolve();
@@ -406,26 +508,25 @@ export class WorldStore {
           );
           const block = await this.chunk(id, x, z);
           requireWorld(block, '不能保存未生成区块的进度');
-          const state = validateProgress(patch.state),
+          const state = validateProgress(patch.state, block.layout.outpost?.spawns.length ?? 4),
             old = p.chunks[key];
           requireWorld(
             !old ||
               (old.defeated.every((n) => state.defeated.includes(n)) && (!old.rewarded || state.rewarded)),
             '不能回退已经保存的进度',
           );
-          p.chunks[key] =
-            state.defeated.length === 4
-              ? {
-                  ...state,
-                  safePosition: {
-                    cx: x,
-                    cz: z,
-                    x: block.layout.outpost.center[0],
-                    y: 0,
-                    z: block.layout.outpost.center[1],
-                  },
-                }
-              : state;
+          p.chunks[key] = outpostComplete(state)
+            ? {
+                ...state,
+                safePosition: {
+                  cx: x,
+                  cz: z,
+                  x: block.layout.outpost.center[0],
+                  y: 0,
+                  z: block.layout.outpost.center[1],
+                },
+              }
+            : state;
         }
         if (patch.run !== undefined) {
           const b = buildingById(patch.run.buildingId);
@@ -436,7 +537,7 @@ export class WorldStore {
           if (patch.run.reset === true)
             p.runs[b.id] = { runId: old.runId + 1, defeated: [], rewarded: false };
           else {
-            const state = validateProgress(patch.run);
+            const state = validateProgress(patch.run, 4);
             requireWorld(
               old.defeated.every((n) => state.defeated.includes(n)) && (!old.rewarded || state.rewarded),
               '不能回退挑战进度',
@@ -447,10 +548,7 @@ export class WorldStore {
         if (patch.safePosition !== undefined) {
           const pos = validAddress(patch.safePosition),
             key = coordinates(pos.cx, pos.cz);
-          requireWorld(
-            key === '0,0' || p.chunks[key]?.defeated.length === 4,
-            '安全位置必须位于营地或已清理据点',
-          );
+          requireWorld(key === '0,0' || outpostComplete(p.chunks[key]), '安全位置必须位于营地或已清理据点');
           const block = await this.chunk(id, pos.cx, pos.cz);
           const center = block.layout.outpost?.center ?? [64, 64];
           p.safePosition = { cx: pos.cx, cz: pos.cz, x: center[0], y: 0, z: center[1] };
@@ -485,15 +583,18 @@ export function deepSeekGenerator({
       cover: [{ x: 108, z: 108, w: 2, d: 2, h: 1 }],
       landmark: [64, 64],
       supply: [68, 68],
-      outpost: {
-        center: [64, 64],
-        spawns: [
-          [56, 56],
-          [72, 56],
-          [56, 72],
-          [72, 72],
-        ],
-      },
+      outpost:
+        x === 0 && z === 0
+          ? null
+          : {
+              center: [64, 64],
+              spawns: [
+                [56, 56],
+                [72, 56],
+                [56, 72],
+                [72, 72],
+              ],
+            },
     };
     let correction = '';
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -506,9 +607,11 @@ export function deepSeekGenerator({
                 role: 'system',
                 content:
                   '你是涂鸦游戏场景设计师，只返回完整 JSON。输出必须使用example的对象结构和英文键名，不要添加theme、result、data、example等包装层。example表示输出结构，context是只读背景。名称使用有特色的中文，不要照抄例子。name最多30字符，sign最多24字符，background最多500字符，style最多300字符。修正correction中指出的错误后仍输出完整对象。' +
-                  (design.kind === 'theme'
-                    ? '本次只生成世界主题，顶层必须包含background字符串、name字符串、style字符串、districts数组。districts恰好两个对象，每个只有name和style字符串。'
-                    : '本次生成建筑模板变化：palette只能blue/green/orange；decoration只能awning/stripes/plain；slots恰好四项，每项只能empty/shelf/crate/table。不得输出坐标或改变结构。street顶层只有name和buildings，buildings逐一保留example中的id；interior顶层只有name、sign、palette、decoration、slots，风格与context中的外观一致。'),
+                  (design.kind === 'house'
+                    ? '本次设计可探索的住宅室内。顶层只有name、palette、width、depth、floors。palette为blue/green/orange；width只能20/24/28，depth只能24/28/32。自主决定一至三层，floors每项有left和right数组，各一至三个房间；房间只有type、window布尔值、connecting布尔值。type只能living/kitchen/bedroom/bathroom/study/storage/dining。一层必须有客厅living和厨房kitchen。window决定该房间是否有外窗，connecting决定是否有通往同侧下一个房间的门。其他楼层用途、房间数量与窗户自由搭配，不要照抄示例。引擎负责中央走廊、门洞、楼板和连续楼梯，禁止输出坐标或可执行代码。'
+                    : design.kind === 'theme'
+                      ? '本次只生成世界主题，顶层必须包含background字符串、name字符串、style字符串、districts数组。districts恰好两个对象，每个只有name和style字符串。'
+                      : '本次生成建筑模板变化：palette只能blue/green/orange；decoration只能awning/stripes/plain；slots恰好四项，每项只能empty/shelf/crate/table。不得输出坐标或改变结构。street顶层只有name和buildings，buildings逐一保留example中的id；interior顶层只有name、sign、palette、decoration、slots，风格与context中的外观一致。'),
               },
               { role: 'user', content: JSON.stringify({ ...design, correction }) },
             ]
@@ -516,7 +619,7 @@ export function deepSeekGenerator({
               {
                 role: 'system',
                 content:
-                  '你是涂鸦城镇关卡设计师。只输出 JSON。区域128米见方，平地y=0。结构：{"name":"区域名","roads":[[x1,z1,x2,z2]],"buildings":[{"x":20,"z":20,"w":12,"d":12,"h":8}],"cover":[{"x":40,"z":20,"w":2,"d":2,"h":1}],"landmark":[64,64],"supply":[68,68],"outpost":{"center":[64,64],"spawns":[[52,52],[76,52],[52,76],[76,76]]}}。道路宽8米，轴对齐，必须连接给定四个出口且互通；可以用折线路段连接。道路1–24段，建筑不超过32个高度3–18米，掩体不超过32个高度0.7–2米。建筑和掩体的x,z是矩形中心坐标，不是左下角；w,d是完整宽深，h为高度。必须满足x-w/2>=8、x+w/2<=120、z-d/2>=8、z+d/2<=120。建议从suggestedCenters选择互不重复的空地中心，宽深选2–16米，放4–8栋建筑和2–4个掩体。提供的reference是已可行的道路和出生点布局，建议保留其roads并从空地选择建筑，改变建筑数量、长宽、高度和掩体位置形成不同街区；不要把建筑移到道路上。组件相互至少间隔1米，建筑外缘与道路中线至少相隔4米，任何地标、补给、出生点周围留出1.2米空间。所有点坐标在[4,124]内。优先少量建筑形成不同广场、街巷与屋顶轮廓。地标为地面标志，不能被建筑遮挡。四个敌人出生点相距至少2.5米。若提供correction，则根据其中error修改previousOutput的错误，仍输出完整JSON，不要重复无效布局。',
+                  '你是涂鸦城镇关卡设计师。只输出 JSON。区域128米见方，平地y=0。结构：{"name":"区域名","roads":[[x1,z1,x2,z2]],"buildings":[{"x":20,"z":20,"w":12,"d":12,"h":8}],"cover":[{"x":40,"z":20,"w":2,"d":2,"h":1}],"landmark":[64,64],"supply":[68,68],"outpost":{"center":[64,64],"spawns":[[52,52],[76,52],[52,76],[76,76]]}}。道路宽8米，轴对齐，必须连接给定四个出口且互通；可以用折线路段连接。道路1–24段，建筑不超过32个高度3–18米，掩体不超过32个高度0.7–2米。建筑和掩体的x,z是矩形中心坐标，不是左下角；w,d是完整宽深，h为高度。必须满足x-w/2>=8、x+w/2<=120、z-d/2>=8、z+d/2<=120。建议从suggestedCenters选择互不重复的空地中心，宽深选6–16米，必须放4–8栋建筑和2–4个掩体，不得返回空建筑数组。营地区块[0,0]的outpost必须为null，其他区块必须包含四个敌人出生点。提供的reference是已可行的道路和出生点布局，建议保留其roads并从空地选择建筑，改变建筑数量、长宽、高度和掩体位置形成不同街区；不要把建筑移到道路上。组件相互至少间隔1米，建筑外缘与道路中线至少相隔4米，任何地标、补给、出生点周围留出1.2米空间。所有点坐标在[4,124]内。优先少量建筑形成不同广场、街巷与屋顶轮廓。地标为地面标志，不能被建筑遮挡。四个敌人出生点相距至少2.5米。若提供correction，则根据其中error修改previousOutput的错误，仍输出完整JSON，不要重复无效布局。',
               },
               {
                 role: 'user',
@@ -571,7 +674,7 @@ export function deepSeekGenerator({
           '模型输出为空或已截断',
         );
         const parsed = JSON.parse(body.choices[0].message.content);
-        return design ? validate(parsed) : validateLayout(parsed, seed, x, z);
+        return design ? validate(parsed) : validateGeneratedLayout(parsed, seed, x, z);
       } catch (error) {
         log(
           JSON.stringify({

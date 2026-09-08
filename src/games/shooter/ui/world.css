@@ -47,3 +47,42 @@
   height: 105px;
   border: 1px solid #5874a6;
 }
+.world-hud > .world-interior-loading {
+  position: fixed;
+  left: 50%;
+  top: 28%;
+  transform: translateX(-50%);
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  width: min(360px, 80vw);
+  max-width: none;
+  padding: 24px;
+  border: 2px solid #c77b37;
+  background: #fffdf2f2;
+  box-shadow: 5px 5px 0 #18356c;
+  text-align: center;
+}
+.world-hud > .world-interior-loading[hidden] {
+  display: none;
+}
+.world-interior-loading small {
+  line-height: 1.8;
+}
+.world-interior-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #ccd3dc;
+  border-top-color: #c77b37;
+  animation: world-room-turn 1.2s linear infinite;
+}
+@keyframes world-room-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .world-interior-spinner {
+    animation: none;
+  }
+}

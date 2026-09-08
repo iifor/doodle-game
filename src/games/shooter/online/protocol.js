@@ -1,3 +1,5 @@
+import { validCharacterInk } from '../colors.js';
+
 export const VERSION = 1;
 export const MAX_PLAYERS = 10;
 export const TARGET_KILLS = 20;
@@ -130,6 +132,7 @@ export function validateRoom(s) {
     );
     ids.add(p.id);
     validateName(p.name);
+    requireValue(p.ink === undefined || validCharacterInk(p.ink), '玩家颜色无效');
     validateSnap(p.snap);
     requireValue(
       integer(p.kills) &&

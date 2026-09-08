@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Settings } from './Settings.jsx';
 import { Controls } from './Controls.jsx';
+import { inkCSS, inkName } from '../colors.js';
 
 export function OnlineMenu({ view }) {
   const { stage, room, selfId, busy, error, actions, prefs } = view;
@@ -99,6 +100,7 @@ export function OnlineMenu({ view }) {
                 {sorted.map((p) => (
                   <tr key={p.id}>
                     <td>
+                      <span style={{ color: inkCSS(p.ink) }}>● {inkName(p.ink)} · </span>
                       {p.name}
                       {p.id === selfId ? '（你）' : ''}
                       {p.id === room.host ? ' · 房主' : ''}

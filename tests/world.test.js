@@ -1,3 +1,5 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, mkdir, rm } from 'node:fs/promises';
@@ -10,8 +12,12 @@ import {
   address,
   localPosition,
   checksum,
+  validateGeneratedLayout,
 } from '../src/games/shooter/exploration/schema.js';
-import { Chunks } from '../src/games/shooter/exploration/chunks.js';
+import { Chunks, buildChunk } from '../src/games/shooter/exploration/chunks.js';
+import { roadsidePlan } from '../src/games/shooter/exploration/roadside.js';
+import { enterableBuildings } from '../src/games/shooter/exploration/interiors.js';
+import { NavGrid } from '../src/games/shooter/nav.js';
 import { World, makeBody } from '../src/games/shooter/physics.js';
 import { Packets } from '../src/games/shooter/exploration/network.js';
 import { Exploration } from '../src/games/shooter/exploration/session.js';
@@ -19,6 +25,9 @@ import { Player } from '../src/games/shooter/player.js';
 import { EnemyManager } from '../src/games/shooter/enemies/manager.js';
 import { Effects } from '../src/games/shooter/effects.js';
 import { disposeTree } from '../src/shared/resources.js';
+import { randomizeEncounter } from '../src/games/shooter/exploration/encounters.js';
+import { ENCOUNTER_TYPES, validateProgress } from '../src/games/shooter/exploration/schema.js';
+import { TYPES } from '../src/games/shooter/enemies/types.js';
 
 function layout(seed, x, z) {
   const roads = exits(seed, x, z).flatMap(([a, b]) =>
@@ -33,7 +42,7 @@ function layout(seed, x, z) {
     {
       name: '测试街区',
       roads,
-      buildings: [],
+      buildings: [20, 108].flatMap((x) => [20, 108].map((z) => ({ x, z, w: 8, d: 8, h: 8 }))),
       cover: [],
       landmark: [64, 64],
       supply: [68, 68],
@@ -55,8 +64,415 @@ function layout(seed, x, z) {
     z,
   );
 }
+
+test('roadside scenery is stable and keeps actual paths to exits, encounters and house doors', () => {
+  for (let i = 0; i < 12; i++) {
+    const seed = `road-${i}`,
+      block = { x: 1, z: 0, layout: layout(seed, 1, 0) },
+      original = JSON.stringify(block);
+    const plan = roadsidePlan(block);
+    assert.ok(plan.length >= 30 && plan.length <= 64);
+    assert.deepEqual(
+      new Set(plan.map((a) => a.kind)),
+      new Set(['puddle', 'barrier', 'sign', 'mound', 'rock', 'grass']),
+    );
+    assert.deepEqual(roadsidePlan(JSON.parse(original)), plan);
+    assert.equal(JSON.stringify(block), original);
+    const built = buildChunk(block);
+    try {
+      const nav = new NavGrid(built.world, built.level.bounds, 2).build();
+      const first = exits(seed, 1, 0)[0],
+        start = new THREE.Vector3(first[0], 0, first[1]);
+      const goals = [
+        ...exits(seed, 1, 0),
+        block.layout.supply,
+        block.layout.landmark,
+        ...block.layout.outpost.spawns,
+        ...enterableBuildings(block).map((b) => [b.door.x, b.door.z]),
+      ];
+      for (const [x, z] of goals)
+        assert.ok(nav.findPath(start, new THREE.Vector3(x, 0, z)), `${seed} path to ${x},${z}`);
+      assert.ok(built.root.children.length <= 16, 'geometry must be batched by material');
+    } finally {
+      disposeTree(built.root);
+    }
+  }
+  assert.deepEqual(roadsidePlan({ layout: { interior: true } }), []);
+  assert.deepEqual(roadsidePlan({ layout: { schemaVersion: 2 } }), []);
+});
+
+test('mounds can be climbed, barriers stop walking and bullets, and shallow puddles stay walkable', () => {
+  const block = { x: 1, z: 0, layout: layout('physical-props', 1, 0) },
+    built = buildChunk(block);
+  const walk = (a) => {
+    const body = makeBody(new THREE.Vector3(a.x - a.w / 2 - 0.8, 0, a.z), 0.35, 1.75);
+    body.onGround = true;
+    let highest = 0;
+    for (let i = 0; i < 180; i++) {
+      body.vel.set(3, -1, 0);
+      built.world.moveBody(body, 1 / 60);
+      highest = Math.max(highest, body.pos.y);
+      if (body.pos.x > a.x + a.w / 2 + 0.5) break;
+    }
+    return { body, highest };
+  };
+  try {
+    const mound = built.level.roadside.find((a) => a.kind === 'mound');
+    const crossed = walk(mound);
+    assert.ok(crossed.highest >= mound.h - 0.01);
+    assert.ok(crossed.body.pos.x > mound.x + mound.w / 2);
+    const barrier = built.level.roadside.find((a) => a.kind === 'barrier');
+    const stopped = walk(barrier);
+    assert.ok(stopped.body.pos.x < barrier.x);
+    const hit = built.world.raycast(
+      new THREE.Vector3(barrier.x - barrier.w / 2 - 0.5, 0.65, barrier.z),
+      new THREE.Vector3(1, 0, 0),
+      barrier.w + 1,
+    );
+    assert.equal(hit?.box.data.tag, 'roadside-barrier');
+    const puddle = built.level.roadside.find((a) => a.kind === 'puddle');
+    const wet = walk(puddle);
+    assert.ok(wet.body.pos.x > puddle.x + puddle.w / 2);
+    assert.ok(wet.highest < 0.1);
+  } finally {
+    disposeTree(built.root);
+  }
+});
+
+test('encounters vary in count, positions and weapons while keeping a stable traversable layout', () => {
+  const counts = new Set(),
+    types = new Set();
+  for (let i = 0; i < 160; i++) {
+    const seed = `encounter-${i}`,
+      original = layout(seed, 1, 0);
+    const result = randomizeEncounter(original, seed, 1, 0);
+    assert.deepEqual(randomizeEncounter(original, seed, 1, 0), result);
+    assert.deepEqual(randomizeEncounter(result, seed, 1, 0), result);
+    assert.deepEqual(result.buildings, original.buildings);
+    counts.add(result.outpost.spawns.length);
+    result.outpost.types.forEach((type) => types.add(type));
+    for (const [index, p] of result.outpost.spawns.entries())
+      for (const q of result.outpost.spawns.slice(index + 1))
+        assert.ok(Math.hypot(p[0] - q[0], p[1] - q[1]) >= 12);
+  }
+  assert.deepEqual([...counts].sort(), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual([...types].sort(), [...ENCOUNTER_TYPES].sort());
+});
+
+test('old encounter upgrade backs up untouched fights and preserves partial and completed progress', async (t) => {
+  const { store, info, directory } = await storeFor(t);
+  const finished = await store.ensure(info.id, 1, 0, 'host');
+  const partial = await store.ensure(info.id, 0, 1, 'host');
+  const untouched = await store.ensure(info.id, 1, 1, 'host');
+  await store.update(info.id, 'host', {
+    revision: 0,
+    chunk: [1, 0],
+    state: { defeated: [0, 1, 2, 3], rewarded: true },
+  });
+  await store.update(info.id, 'host', {
+    revision: 1,
+    chunk: [0, 1],
+    state: { defeated: [1], rewarded: false },
+  });
+  store.generate = () => {
+    throw Error('upgrade must not call AI');
+  };
+  assert.equal((await store.prepareEncounters(info.id, 'host')).encounterVersion, 1);
+  assert.deepEqual(await store.chunk(info.id, 1, 0), finished);
+  assert.deepEqual(await store.chunk(info.id, 0, 1), partial);
+  const upgraded = await store.chunk(info.id, 1, 1);
+  assert.equal(upgraded.layout.outpost.encounterVersion, 1);
+  assert.deepEqual(upgraded.layout.roads, untouched.layout.roads);
+  assert.deepEqual(upgraded.layout.buildings, untouched.layout.buildings);
+  assert.deepEqual(
+    JSON.parse(await readFile(join(directory, info.id, 'encounter-backups', '1,1.json'), 'utf8')),
+    untouched,
+  );
+  const restored = new WorldStore(directory, ({ seed, x, z }) => layout(seed, x, z));
+  restored.claim(info.id, 'host');
+  await restored.prepareEncounters(info.id, 'host');
+  assert.deepEqual(await restored.chunk(info.id, 1, 1), upgraded);
+  assert.equal((await restored.ensure(info.id, 2, 1, 'host')).layout.outpost.encounterVersion, 1);
+  assert.deepEqual((await restored.progress(info.id)).chunks['0,1'].defeated, [1]);
+});
+
+test('variable encounter totals reject early rewards and save one reward after the last enemy', async (t) => {
+  for (const total of [1, 3, 8]) {
+    const { store, info } = await storeFor(t, ({ seed, x, z }) => {
+      const base = layout(seed, x, z);
+      return {
+        ...base,
+        outpost: {
+          center: [64, 64],
+          encounterVersion: 1,
+          types: Array(total).fill('heavy'),
+          spawns: [
+            [40, 40],
+            [52, 40],
+            [64, 40],
+            [76, 40],
+            [88, 40],
+            [40, 52],
+            [52, 52],
+            [64, 52],
+          ].slice(0, total),
+        },
+      };
+    });
+    const block = await store.ensure(info.id, 1, 0, 'host');
+    assert.throws(() => validateProgress({ total, defeated: [total], rewarded: false }));
+    await assert.rejects(
+      store.update(info.id, 'host', {
+        revision: 0,
+        chunk: [1, 0],
+        state: { total, defeated: [], rewarded: true },
+      }),
+    );
+    if (total > 1)
+      await assert.rejects(
+        store.update(info.id, 'host', {
+          revision: 0,
+          chunk: [1, 0],
+          state: { total: 1, defeated: [0], rewarded: true },
+        }),
+      );
+    const session = Object.create(Exploration.prototype);
+    Object.assign(session, {
+      isHost: true,
+      info,
+      progress: await store.progress(info.id),
+      saves: Promise.resolve(),
+      saving: 0,
+      unsaved: [],
+      pendingKills: new Map(),
+      players: new Map(),
+      ctx: { hud: { tip() {} } },
+      render() {},
+      report() {},
+      failed: new Map(),
+      chunks: { loaded: new Map([['1,0', { block }]]) },
+    });
+    const p = session.newActor('host', '房主', { cx: 1, cz: 0, x: 64, y: 0, z: 64 });
+    session.players.set(p.id, p);
+    session.api = {
+      call: async (_path, method, patch) =>
+        method === 'POST' ? store.update(info.id, 'host', patch) : store.progress(info.id),
+    };
+    for (let index = 0; index < total; index++) {
+      session.killed({ chunk: '1,0', spawnIndex: index });
+      await session.saves;
+      assert.equal(p.reward, index === total - 1 ? 1 : 0);
+    }
+    session.killed({ chunk: '1,0', spawnIndex: total - 1 });
+    await session.saves;
+    assert.equal(p.reward, 1);
+    assert.equal(session.unsaved.length, 0);
+    assert.equal((await store.progress(info.id)).chunks['1,0'].safePosition.cx, 1);
+  }
+});
+
+test('enemy arrivals are staggered by proximity and do not respawn defeated enemies', () => {
+  const session = Object.create(Exploration.prototype),
+    born = [],
+    byId = new Map();
+  const item = {
+    key: '1,0',
+    x: 1,
+    z: 0,
+    block: {
+      layout: {
+        outpost: {
+          encounterVersion: 1,
+          center: [64, 64],
+          spawns: [
+            [20, 20],
+            [50, 20],
+            [100, 100],
+          ],
+          types: ['heavy', 'shield', 'sniper'],
+        },
+      },
+    },
+  };
+  const player = { active: true, hp: 110, pos: { cx: 1, cz: 0, x: 20, y: 0, z: 4 } };
+  Object.assign(session, {
+    info: { seed: 'arrivals', schemaVersion: 1 },
+    progress: { chunks: {} },
+    pendingKills: new Map(),
+    players: new Map([['host', player]]),
+    chunks: {
+      loaded: new Map([['1,0', item]]),
+      position: (p) => new THREE.Vector3(...localPosition(p, [0, 0])),
+    },
+    ctx: {
+      game: { time: 0 },
+      enemies: {
+        byId,
+        spawn(type, pos, id) {
+          const e = { type, pos, id };
+          byId.set(id, e);
+          born.push({ ...e, time: session.ctx.game.time });
+          return e;
+        },
+      },
+    },
+  });
+  const tick = (start, end) => {
+    for (let i = start; i <= end; i++) {
+      session.ctx.game.time = i / 10;
+      session.spawnOutposts();
+    }
+  };
+  tick(0, 100);
+  assert.equal(born.length, 2);
+  assert.ok(born[1].time - born[0].time >= 0.8);
+  assert.deepEqual(born.map((e) => e.type).sort(), ['heavy', 'shield']);
+  player.pos.x = 100;
+  player.pos.z = 100;
+  tick(101, 150);
+  assert.equal(born.length, 2);
+  player.pos.z = 80;
+  tick(151, 250);
+  assert.equal(born.length, 3);
+  assert.equal(born[2].type, 'sniper');
+  session.progress.chunks['1,0'] = { total: 3, defeated: [0, 1, 2], rewarded: true };
+  byId.clear();
+  tick(251, 350);
+  assert.equal(born.length, 3);
+});
+
+test('guest snapshots render every encounter weapon and accept heavy enemy health', () => {
+  const session = Object.create(Exploration.prototype);
+  const ctx = { scene: new THREE.Scene(), effects: { strokeBurst() {} } };
+  ctx.enemies = new EnemyManager(ctx);
+  const pos = { cx: 1, cz: 0, x: 64, y: 0, z: 64 };
+  Object.assign(session, {
+    info: { schemaVersion: 1 },
+    selfId: 'guest',
+    players: new Map(),
+    acceptedRevision: 0,
+    progress: { chunks: {} },
+    remotes: new Map(),
+    ctx,
+    render() {},
+    applyHealth() {},
+    chunks: {
+      loaded: new Map([['1,0', {}]]),
+      position: (p) => new THREE.Vector3(...localPosition(p, [0, 0])),
+    },
+  });
+  const p = session.newActor('guest', '队友', pos);
+  session.players.set(p.id, p);
+  const enemies = ENCOUNTER_TYPES.map((type, index) => ({
+    id: `enemy-${index}`,
+    type,
+    hp: TYPES[type].hp,
+    pos,
+    chunk: '1,0',
+    yaw: 0,
+  }));
+  try {
+    session.applySnapshot({ revision: 1, players: [p], enemies, bullets: [], chunks: [], error: '' });
+    assert.deepEqual(
+      ctx.enemies.enemies.map((e) => e.T.weapon),
+      ['rifle', 'blade', 'shotgun', 'sniper', 'pistol'],
+    );
+    assert.equal(ctx.enemies.byId.get('enemy-2').hp, 320);
+    assert.equal(ctx.enemies.byId.get('enemy-4').hp, 150);
+    assert.throws(
+      () =>
+        session.applySnapshot({
+          revision: 2,
+          players: [p],
+          enemies: [{ ...enemies[0], hp: 320 }],
+          bullets: [],
+          chunks: [],
+          error: '',
+        }),
+      /敌人状态无效/,
+    );
+  } finally {
+    ctx.enemies.clear();
+    disposeTree(ctx.scene);
+  }
+});
+
+test('AI world creation requires populated land and never saves an empty fallback on failure', async (t) => {
+  const { store, directory } = await storeFor(t);
+  const info = await store.create('持续探索', 1, true);
+  assert.equal(info.schemaVersion, 1);
+  assert.equal(info.aiGenerated, true);
+  const camp = await store.chunk(info.id, 0, 0);
+  assert.ok(camp.layout.buildings.length >= 4);
+  assert.equal(camp.layout.outpost, null);
+  assert.throws(() => validateGeneratedLayout(campLayout('s'), 's', 0, 0), /四栋建筑/);
+  const before = await store.list();
+  const unavailable = new WorldStore(directory, () => {
+    throw new Error('未配置 DEEPSEEK_API_KEY');
+  });
+  await assert.rejects(unavailable.create('不能创建空地图', 1, true), /DEEPSEEK_API_KEY/);
+  assert.deepEqual(await store.list(), before);
+});
+
+test('stationary explorers prefetch adjacent regions beyond the old 2x2 map in either direction', () => {
+  for (const [cx, cz] of [
+    [0, 0],
+    [2, -3],
+    [-20, 16],
+  ]) {
+    const requested = [];
+    const s = Object.create(Exploration.prototype);
+    Object.assign(s, {
+      selfId: 'host',
+      progress: { generationPaused: false },
+      failed: new Map(),
+      requests: new Map(),
+      manifest: new Set([`${cx},${cz}`]),
+      chunks: { loaded: new Map() },
+      load(x, z, generate) {
+        requested.push([x, z, generate]);
+        return Promise.resolve();
+      },
+    });
+    const p = { id: 'host', active: true, pos: { cx, cz, x: 64, z: 64 }, velocity: [0, 0, 0] };
+    s.frontier(p);
+    assert.equal(requested.length, 4);
+    assert.ok(requested.some(([x, z, gen]) => x === cx - 1 && z === cz && gen));
+    assert.ok(requested.some(([x, z, gen]) => x === cx && z === cz + 1 && gen));
+    requested.length = 0;
+    s.progress.generationPaused = true;
+    s.frontier(p);
+    assert.equal(requested.length, 0);
+    s.progress.generationPaused = false;
+    s.failed.set(`${cx - 1},${cz}`, '模型失败');
+    s.frontier(p);
+    assert.equal(requested.length, 3);
+  }
+});
+
+test('world UI creation does not fall back to a blank legacy save when AI is unavailable', async () => {
+  const calls = [];
+  const s = Object.create(Exploration.prototype);
+  Object.assign(s, {
+    generation: 0,
+    render() {},
+    report(message) {
+      this.error = message;
+    },
+    api: {
+      async call(path, method, body) {
+        calls.push(body);
+        throw new Error('未配置 DEEPSEEK_API_KEY');
+      },
+    },
+  });
+  await s.host(null, '新世界', '玩家');
+  assert.deepEqual(calls, [{ name: '新世界', schemaVersion: 1, aiGenerated: true }]);
+  assert.match(s.error, /DEEPSEEK_API_KEY/);
+  assert.equal(s.busy, false);
+});
 async function storeFor(t, generator = ({ seed, x, z }) => layout(seed, x, z)) {
-  const directory = await mkdtemp('/private/tmp/doodle-world-test-');
+  const directory = await mkdtemp(join(tmpdir(), 'doodle-world-test-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new WorldStore(directory, generator),
     info = await store.create('测试世界');
@@ -570,8 +986,9 @@ test('repeated long-distance travel unloads geometry while retaining explored me
     session.maintain();
     assert.equal(session.chunks.loaded.size, 1);
     assert.deepEqual(session.chunks.address(body.pos), p.pos);
-    assert.ok(ctx.world.boxes.length <= 5);
-    assert.equal(ctx.scene.children.length, 5);
+    assert.ok(ctx.world.boxes.length <= 160); // One detailed street; old distant colliders must unload.
+    assert.equal(ctx.scene.children.length, 2); // Loaded geometry plus continuous ground, no blue walls.
+    assert.equal(session.chunks.barriers.length, 0);
   }
   assert.equal(session.manifest.size, 12);
   session.chunks.dispose();

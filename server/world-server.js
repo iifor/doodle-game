@@ -1,8 +1,9 @@
 import { createServer } from 'node:http';
 import { readFile, stat, mkdir, open, unlink } from 'node:fs/promises';
-import { resolve, extname, join } from 'node:path';
+import { resolve, extname, join, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { loadEnvFile } from 'node:process';
 import { WorldStore, deepSeekGenerator } from './world-store.js';
 import { requireWorld } from '../src/games/shooter/exploration/schema.js';
 
@@ -25,10 +26,11 @@ export function createWorldServer({ store, dist = resolve('dist') }) {
       const url = new URL(req.url, `http://${req.headers.host}`);
       if (!url.pathname.startsWith('/api/worlds')) {
         requireWorld(req.method === 'GET' || req.method === 'HEAD', '不支持的请求');
-        const relative = decodeURIComponent(url.pathname);
-        const path = resolve(dist, `.${relative === '/' ? '/index.html' : relative}`);
+        const requested = decodeURIComponent(url.pathname);
+        const path = resolve(dist, `.${requested === '/' ? '/index.html' : requested}`);
+        const within = relative(dist, path);
         requireWorld(
-          path.startsWith(dist + '/') && (await stat(path)).isFile(),
+          within && !within.startsWith('..') && !isAbsolute(within) && (await stat(path)).isFile(),
           '页面不存在；请先运行 npm run build',
         );
         const mime = {
@@ -80,7 +82,7 @@ export function createWorldServer({ store, dist = resolve('dist') }) {
         if (req.method === 'GET') reply(200, await store.list());
         else {
           requireWorld(req.method === 'POST', '不支持的请求');
-          reply(201, await store.create(body.name, body.schemaVersion ?? 1));
+          reply(201, await store.create(body.name, body.schemaVersion ?? 1, body.aiGenerated ?? false));
         }
       } else if (operation === 'lease') {
         if (req.method === 'DELETE') {
@@ -88,8 +90,9 @@ export function createWorldServer({ store, dist = resolve('dist') }) {
           reply(200, {});
         } else {
           requireWorld(req.method === 'POST', '不支持的请求');
-          const info = await store.info(id);
+          let info = await store.info(id);
           store.claim(id, owner);
+          if (!body.renew) info = await store.prepareEncounters(id, owner);
           reply(
             200,
             body.renew
@@ -126,6 +129,11 @@ export function createWorldServer({ store, dist = resolve('dist') }) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    loadEnvFile('.env.local');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
   const directory = resolve(process.env.WORLD_DATA_DIR || 'world-data');
   await mkdir(directory, { recursive: true });
   const lockPath = join(directory, '.service.lock');

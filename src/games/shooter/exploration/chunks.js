@@ -5,6 +5,9 @@ import { NavGrid } from '../nav.js';
 import { INK, makeInkMaterial } from '../render.js';
 import { disposeTree } from '../../../shared/resources.js';
 import { sceneOf } from './region.js';
+import { enterableBuildings, blockKey } from './interiors.js';
+import { buildHouse } from './interior-geometry.js';
+import { buildRoadside } from './roadside.js';
 import { SIZE, keyOf, address, localPosition } from './schema.js';
 
 function sign(root, text, x, y, z, width, ink, north = false) {
@@ -73,7 +76,7 @@ function templateInterior(b, l, root) {
     } else b.box(a.x, 0, a.z, a.w, a.h, a.d, { ink: INK.ORANGE });
   }
   b.box(64, 0, 64 - l.d / 2 + 0.25, 2.5, 2.8, 0.06, { ink: INK.GREEN, noCollide: true });
-  sign(root, 'B 返回街道', 64, 3.5, 64 - l.d / 2 + 0.3, 6, INK.GREEN);
+  sign(root, 'E 返回街道', 64, 3.5, 64 - l.d / 2 + 0.3, 6, INK.GREEN);
   b.ring(l.entrance[0], 0.25, l.entrance[1], 'y');
 }
 
@@ -82,14 +85,16 @@ export function buildChunk(block) {
     world = new World();
   const b = createBuilder(root, world),
     l = block.layout;
-  b.box(64, -1, 64, SIZE, 1, SIZE);
-  for (const [x1, z1, x2, z2] of l.roads) {
+  if (l.interiorVersion) buildHouse(b, l, root, sign);
+  else if (l.interior) b.box(64, -1, 64, SIZE, 1, SIZE);
+  else b.collider(64, -1, 64, SIZE, 1, SIZE);
+  for (const [x1, z1, x2, z2] of l.interior || l.schemaVersion === 2 ? l.roads : []) {
     b.box((x1 + x2) / 2, 0.002, (z1 + z2) / 2, Math.abs(x2 - x1) + 8, 0.012, Math.abs(z2 - z1) + 8, {
       noCollide: true,
       ink: INK.BLACK,
     });
   }
-  if (l.interior) templateInterior(b, l, root);
+  if (l.interior && !l.interiorVersion) templateInterior(b, l, root);
   for (const a of l.buildings) {
     if (a.templateId) {
       templateExterior(b, a, root);
@@ -106,16 +111,25 @@ export function buildChunk(block) {
     b.ring(a.x, a.h + 2, a.z, 'y');
   }
   for (const a of l.cover) b.box(a.x, 0, a.z, a.w, a.h, a.d, { ink: INK.ORANGE });
-  b.ring(l.landmark[0], 4, l.landmark[1], 'y');
-  b.ring(l.supply[0], 0.6, l.supply[1], 'y');
+  for (const a of enterableBuildings(block)) {
+    const front = a.z - a.d / 2;
+    b.box(a.x, 0, front - 0.07, 2, 2.8, 0.08, { noCollide: true, ink: INK.ORANGE });
+    b.box(a.x + 0.65, 1.3, front - 0.15, 0.12, 0.12, 0.12, { noCollide: true, ink: INK.BLACK });
+    sign(root, 'E 进入住宅', a.x, 3.15, front - 0.17, 5, INK.ORANGE, true);
+  }
+  if (!l.interiorVersion) {
+    b.ring(l.landmark[0], 4, l.landmark[1], 'y');
+    b.ring(l.supply[0], 0.6, l.supply[1], 'y');
+  }
   if (l.schemaVersion === 2 && block.x === 0 && block.z === 0) {
     b.box(64, 4, 76, 12, 0.25, 8, { ink: INK.GREEN });
     for (const x of [59, 69]) for (const z of [73, 79]) b.box(x, 0, z, 0.25, 4, 0.25);
-    sign(root, '安全营地 · 沿道路探索 · B 进入建筑', 64, 3, 72, 12, INK.GREEN, true);
+    sign(root, '安全营地 · 沿道路探索 · E 进入建筑', 64, 3, 72, 12, INK.GREEN, true);
   }
   b.L.bounds = l.interior
     ? { minX: 64 - l.w / 2 + 1, maxX: 64 + l.w / 2 - 1, minZ: 64 - l.d / 2 + 1, maxZ: 64 + l.d / 2 - 1 }
     : { minX: 0, maxX: SIZE, minZ: 0, maxZ: SIZE };
+  buildRoadside(b, block, sign);
   b.finish();
   return { root, world, level: b.L, nav: null };
 }
@@ -126,6 +140,14 @@ export class Chunks {
     this.origin = [0, 0];
     this.loaded = new Map();
     this.barriers = [];
+    // A continuous paper ground avoids drawing the streamed chunk rectangle as a world edge.
+    this.ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(8192, 8192),
+      makeInkMaterial({ ink: INK.BLUE, shadeScale: 0, shadeBias: 1 }),
+    );
+    this.ground.rotation.x = -Math.PI / 2;
+    this.ground.position.y = -0.01;
+    ctx.scene.add(this.ground);
     this.ctx.nav = {
       findPath: (from, to) => {
         const pos = this.address(from),
@@ -149,7 +171,7 @@ export class Chunks {
     return new THREE.Vector3(...localPosition(p, this.origin));
   }
   async add(block) {
-    const key = keyOf(block.x, block.z);
+    const key = blockKey(block);
     if (this.loaded.has(key)) return;
     const item = buildChunk(block);
     Object.assign(item, { block, x: block.x, z: block.z, key });
@@ -172,14 +194,16 @@ export class Chunks {
     for (const item of this.loaded.values()) {
       const dx = (item.x - this.origin[0]) * SIZE,
         dz = (item.z - this.origin[1]) * SIZE;
-      item.root.position.set(dx, 0, dz);
+      const dy = item.block.layout.baseY ?? 0;
+      item.root.position.set(dx, dy, dz);
       for (const box of item.world.boxes)
         ctx.world.addBox(
-          { x: box.min.x + dx, y: box.min.y, z: box.min.z + dz },
-          { x: box.max.x + dx, y: box.max.y, z: box.max.z + dz },
+          { x: box.min.x + dx, y: box.min.y + dy, z: box.min.z + dz },
+          { x: box.max.x + dx, y: box.max.y + dy, z: box.max.z + dz },
           box.data,
         );
       for (const ring of item.level.rings) rings.push(ring.clone().add(item.root.position));
+      if (item.block.layout.interiorVersion) continue;
       for (const [ox, oz] of [
         [1, 0],
         [-1, 0],
@@ -197,29 +221,8 @@ export class Chunks {
           { x: x + w / 2, y: 100, z: z + d / 2 },
           { noGrapple: true, frontier: true },
         );
-        const fog = makeInkMaterial({ ink: INK.BLUE, shadeScale: 0.15, shadeBias: 0.7 });
-        // Dithered ink mist fits the existing data-buffer renderer without alpha blending.
-        fog.vertexShader =
-          'varying vec3 vMist;\n' +
-          fog.vertexShader.replace(
-            'vec3 transformed = position;',
-            'vec3 transformed = position; vMist = position;',
-          );
-        fog.fragmentShader =
-          'varying vec3 vMist;\nuniform float uTime;\n' +
-          fog.fragmentShader.replace(
-            'void main() {',
-            `void main() {
-          float top = 3.5 + sin(vMist.x * 0.24 + vMist.z * 0.21 + uTime * 0.3) * 1.5;
-          float density = 1.0 - smoothstep(-3.0, top, vMist.y);
-          float grain = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
-          if (grain > density) discard;`,
-          );
-        const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, 12, d), fog);
-        mesh.position.set(x, 6, z);
-        mesh.userData.chunk = item.key;
-        ctx.scene.add(mesh);
-        this.barriers.push(mesh);
+        // Keep a temporary collision guard until the adjoining saved chunk arrives.
+        // No visible blue wall: this is loading state, not the edge of the world.
       }
     }
     ctx.world.finalize();
@@ -227,13 +230,17 @@ export class Chunks {
   }
   visible(position) {
     const p = this.address(position);
+    this.ground.position.x = position.x;
+    this.ground.position.z = position.z;
+    const info = this.ctx.exploration?.info;
+    const currentScene = sceneOf(p, info);
+    this.ground.visible =
+      currentScene === 'outdoor' && !this.loaded.get(keyOf(p.cx, p.cz))?.block.layout.interior;
     for (const item of this.loaded.values())
       item.root.visible =
         Math.abs(item.x - p.cx) <= 1 &&
         Math.abs(item.z - p.cz) <= 1 &&
-        (!this.ctx.exploration?.info ||
-          this.ctx.exploration.info.schemaVersion !== 2 ||
-          sceneOf(p) === item.block.layout.sceneId);
+        (!info || currentScene === (item.block.layout.sceneId ?? 'outdoor'));
     for (const b of this.barriers) b.visible = this.loaded.get(b.userData.chunk)?.root.visible ?? false;
   }
   rebase(position, actors) {
@@ -284,6 +291,7 @@ export class Chunks {
     this.rebuild();
   }
   dispose() {
+    disposeTree(this.ground);
     for (const key of [...this.loaded.keys()]) this.remove(key);
     for (const mesh of this.barriers) disposeTree(mesh);
     this.barriers = [];

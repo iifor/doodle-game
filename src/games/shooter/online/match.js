@@ -10,6 +10,7 @@ import {
   WEAPONS,
 } from './protocol.js';
 import { eyeOf, shoot, slash, advanceGrenade } from './combat.js';
+import { allocateInk } from '../colors.js';
 
 // Host-owned life, score, round clock and pickup arbitration. Position/aim remain client-owned.
 export class Match {
@@ -34,6 +35,7 @@ export class Match {
     const p = {
       id,
       name,
+      ink: allocateInk(this.players.values()),
       kills: 0,
       deaths: 0,
       life: 1,
@@ -228,6 +230,7 @@ export class Match {
         return {
           id: p.id,
           name: p.name,
+          ink: p.ink,
           kills: p.kills,
           deaths: p.deaths,
           life: p.life,

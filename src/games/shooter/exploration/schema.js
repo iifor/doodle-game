@@ -2,6 +2,9 @@ export const SIZE = 128;
 export const SCHEMA = 1;
 export const GENERATOR = 1;
 export const ENEMY_TYPES = ['grunt', 'grunt', 'rusher', 'sniper'];
+export const ENCOUNTER_TYPES = ['grunt', 'rusher', 'heavy', 'sniper', 'shield'];
+export const MAX_ENCOUNTER_ENEMIES = 8;
+export const outpostComplete = (state) => !!state && state.defeated.length === (state.total ?? 4);
 export function requireWorld(ok, message) {
   if (!ok) throw new Error(message);
 }
@@ -17,7 +20,7 @@ export function address(x, y, z, origin = [0, 0]) {
   const cx = Math.floor(x / SIZE),
     cz = Math.floor(z / SIZE);
   coordinates(cx + origin[0], cz + origin[1]);
-  requireWorld(Number.isFinite(y) && y >= -20 && y <= 100, '高度无效');
+  requireWorld(Number.isFinite(y) && y >= -20 && y <= 1280, '高度无效');
   return { cx: cx + origin[0], cz: cz + origin[1], x: x - cx * SIZE, y, z: z - cz * SIZE };
 }
 export function validAddress(p) {
@@ -30,7 +33,7 @@ export function validAddress(p) {
       p.z >= 0 &&
       p.z < SIZE &&
       p.y >= -20 &&
-      p.y <= 100,
+      p.y <= 1280,
     '区块内位置无效',
   );
   return p;
@@ -121,14 +124,25 @@ export function validateLayout(raw, seed, x, z) {
       : raw.outpost &&
           point(raw.outpost.center) &&
           Array.isArray(raw.outpost.spawns) &&
-          raw.outpost.spawns.length === 4 &&
+          (raw.outpost.encounterVersion === 1
+            ? raw.outpost.spawns.length >= 1 && raw.outpost.spawns.length <= MAX_ENCOUNTER_ENEMIES
+            : raw.outpost.spawns.length === 4) &&
           raw.outpost.spawns.every(point),
     '据点出生点无效',
   );
+  if (!camp && raw.outpost.encounterVersion !== undefined) {
+    requireWorld(
+      raw.outpost.encounterVersion === 1 &&
+        Array.isArray(raw.outpost.types) &&
+        raw.outpost.types.length === raw.outpost.spawns.length &&
+        raw.outpost.types.every((t) => ENCOUNTER_TYPES.includes(t)),
+      '敌人配置无效',
+    );
+  }
   const ends = exits(seed, x, z);
   if (!camp)
-    for (let i = 0; i < 4; i++)
-      for (let j = i + 1; j < 4; j++) {
+    for (let i = 0; i < raw.outpost.spawns.length; i++)
+      for (let j = i + 1; j < raw.outpost.spawns.length; j++) {
         const a = raw.outpost.spawns[i],
           b = raw.outpost.spawns[j];
         requireWorld(Math.hypot(a[0] - b[0], a[1] - b[1]) >= 2.5, '敌人出生点过近');
@@ -193,7 +207,15 @@ export function validateLayout(raw, seed, x, z) {
     cover: raw.cover.map(({ x, z, w, d, h }) => ({ x, z, w, d, h })),
     landmark: [...raw.landmark],
     supply: [...raw.supply],
-    outpost: camp ? null : { center: [...raw.outpost.center], spawns: raw.outpost.spawns.map((p) => [...p]) },
+    outpost: camp
+      ? null
+      : {
+          center: [...raw.outpost.center],
+          spawns: raw.outpost.spawns.map((p) => [...p]),
+          ...(raw.outpost.encounterVersion === 1
+            ? { encounterVersion: 1, types: [...raw.outpost.types] }
+            : {}),
+        },
   };
 }
 export function connectingRoads(seed, x, z) {
@@ -205,6 +227,12 @@ export function connectingRoads(seed, x, z) {
           [64, b, 64, 64],
         ],
   );
+}
+// Generation has a content minimum; archived layouts keep their original validation contract.
+export function validateGeneratedLayout(raw, seed, x, z) {
+  const layout = validateLayout(raw, seed, x, z);
+  requireWorld(layout.buildings.length >= 4, '新区域至少需要四栋建筑，不能生成空地图');
+  return layout;
 }
 export function campLayout(seed) {
   return validateLayout(
@@ -222,17 +250,31 @@ export function campLayout(seed) {
     0,
   );
 }
-export function validateProgress(p) {
+export function validateProgress(p, total = p?.total ?? 4) {
+  requireWorld(
+    Number.isInteger(total) &&
+      total >= 1 &&
+      total <= MAX_ENCOUNTER_ENEMIES &&
+      (p?.total === undefined || p.total === total),
+    '据点敌人总数无效',
+  );
   requireWorld(
     p &&
       Array.isArray(p.defeated) &&
-      p.defeated.length <= 4 &&
-      p.defeated.every((n) => Number.isInteger(n) && n >= 0 && n < 4) &&
+      p.defeated.length <= total &&
+      p.defeated.every((n) => Number.isInteger(n) && n >= 0 && n < total) &&
       new Set(p.defeated).size === p.defeated.length,
     '敌人进度无效',
   );
-  requireWorld(typeof p.rewarded === 'boolean' && (!p.rewarded || p.defeated.length === 4), '奖励进度无效');
-  return { defeated: [...p.defeated].sort(), rewarded: p.rewarded };
+  requireWorld(
+    typeof p.rewarded === 'boolean' && (!p.rewarded || p.defeated.length === total),
+    '奖励进度无效',
+  );
+  return {
+    defeated: [...p.defeated].sort((a, b) => a - b),
+    rewarded: p.rewarded,
+    ...(p.total !== undefined || total !== 4 ? { total } : {}),
+  };
 }
 export async function checksum(value) {
   const bytes = new TextEncoder().encode(JSON.stringify(value));

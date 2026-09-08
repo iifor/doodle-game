@@ -1,4 +1,5 @@
 import { BuildingScenes } from './scenes.js';
+import { dynamicScene } from './interiors.js';
 import { PLOTS, outdoors, buildingAt, doorPosition, sceneOf, validateWorldLayout } from './region.js';
 import * as THREE from 'three';
 import { Transport } from '../online/transport.js';
@@ -13,6 +14,10 @@ import {
   SCHEMA,
   GENERATOR,
   ENEMY_TYPES,
+  ENCOUNTER_TYPES,
+  MAX_ENCOUNTER_ENEMIES,
+  outpostComplete,
+  hash,
   coordinates,
   keyOf,
   validAddress,
@@ -21,6 +26,8 @@ import {
   requireWorld,
 } from './schema.js';
 import { GUNS } from '../weapons/guns.js';
+import { TYPES } from '../enemies/types.js';
+import { allocateInk, inkCSS } from '../colors.js';
 import { WorldAPI, Packets, validateActor } from './network.js';
 
 const nearby = (a, b, radius = 1) => Math.abs(a.cx - b.cx) <= radius && Math.abs(a.cz - b.cz) <= radius;
@@ -28,6 +35,7 @@ const freshProgress = () => ({ defeated: [], rewarded: false });
 const actorData = (p) => ({
   id: p.id,
   name: p.name,
+  ink: p.ink,
   pos: p.pos,
   yaw: p.yaw,
   pitch: p.pitch,
@@ -131,6 +139,18 @@ export class Exploration {
     this.map.height = 150;
     this.map.setAttribute('aria-label', '附近已探索区域地图，绿色表示安全据点');
     this.overlay.append(this.label, this.map);
+    this.loading = document.createElement('div');
+    this.loading.className = 'world-interior-loading';
+    this.loading.hidden = true;
+    this.loading.setAttribute('role', 'status');
+    const spinner = document.createElement('span');
+    spinner.className = 'world-interior-spinner';
+    spinner.setAttribute('aria-hidden', 'true');
+    this.loadingText = document.createElement('strong');
+    const note = document.createElement('small');
+    note.textContent = '首次由 AI 设计并保存，重访读取缓存 · E 取消';
+    this.loading.append(spinner, this.loadingText, note);
+    this.overlay.append(this.loading);
   }
   get enabled() {
     return true;
@@ -167,9 +187,13 @@ export class Exploration {
       players: [...this.players.values()].map(actorData),
       error: this.error,
       busy: this.busy,
-      canEnter: !!this.chunks?.loaded.has(
-        keyOf(this.players.get(this.selfId)?.pos.cx, this.players.get(this.selfId)?.pos.cz),
-      ),
+      canEnter:
+        !!this.chunks?.loaded.has(
+          keyOf(this.players.get(this.selfId)?.pos.cx, this.players.get(this.selfId)?.pos.cz),
+        ) &&
+        (!this.isHost ||
+          this.info?.schemaVersion === 2 ||
+          [...this.chunks.loaded.values()].some((c) => c.block.layout.buildings.length > 0)),
       saving: this.saving,
       unsaved: this.unsaved.length,
       pausedGeneration: this.progress?.generationPaused ?? false,
@@ -215,7 +239,7 @@ export class Exploration {
       breakables: [],
     };
     this.chunks = new Chunks(this.ctx);
-    if (info.schemaVersion === 2) this.scenes = new BuildingScenes(this);
+    this.scenes = new BuildingScenes(this);
     this.reset();
     this.ctx.player.maxHp = 110;
     this.ctx.player.hp = 110;
@@ -229,6 +253,7 @@ export class Exploration {
     return {
       id,
       name,
+      ink: allocateInk(this.players?.values() ?? []),
       pos,
       yaw: 0,
       pitch: 0,
@@ -238,7 +263,7 @@ export class Exploration {
       hook: null,
       hp: 110,
       life: 1,
-      sceneId: this.info?.schemaVersion === 2 ? 'outdoor' : undefined,
+      sceneId: this.scenes ? 'outdoor' : undefined,
       epoch: 0,
       active: false,
       reward: 0,
@@ -262,7 +287,9 @@ export class Exploration {
     this.render();
     try {
       validateName(playerName);
-      const info = id ? { id } : await this.api.call('', 'POST', { name, schemaVersion: 2 });
+      const info = id
+        ? { id }
+        : await this.api.call('', 'POST', { name, schemaVersion: 1, aiGenerated: true });
       const data = await this.api.call(`/${info.id}/lease`, 'POST');
       if (this.disposed || generation !== this.generation) {
         await this.api.call(`/${info.id}/lease`, 'DELETE');
@@ -296,6 +323,18 @@ export class Exploration {
       this.ctx.player._updateCamera(0);
       this.ctx.level.playerStart.copy(this.chunks.position(p));
       await this.loadNeighborhood(p);
+      // Prepare visible, populated land before entering, including old empty-camp saves.
+      if (this.info.schemaVersion === 1 && !this.progress.generationPaused)
+        await Promise.all(
+          [
+            [0, -1],
+            [1, 0],
+          ].map(([dx, dz]) => {
+            const x = p.cx + dx,
+              z = p.cz + dz;
+            return this.load(x, z, !this.manifest.has(keyOf(x, z)));
+          }),
+        );
     } catch (error) {
       this.report(error.message);
     } finally {
@@ -371,7 +410,7 @@ export class Exploration {
     if (this.isHost) {
       const p = this.players.get(from);
       requireWorld(p, '世界中没有该玩家');
-      if (this.scenes && ['interact', 'scene-loaded'].includes(type)) {
+      if (this.scenes && ['interact', 'scene-loaded', 'scene-cancel'].includes(type)) {
         await this.scenes.receive(type, data, from);
         return;
       }
@@ -405,7 +444,7 @@ export class Exploration {
       return;
     }
     requireWorld(from === this.net.connections.keys().next().value, '世界消息并非来自房主');
-    if (this.scenes && ['scene-prepare', 'scene-commit'].includes(type)) {
+    if (this.scenes && ['scene-prepare', 'scene-commit', 'scene-error'].includes(type)) {
       await this.scenes.receive(type, data, from);
       return;
     }
@@ -415,7 +454,7 @@ export class Exploration {
       this.attach(data.info);
       this.progress = { chunks: {}, runs: {}, generationPaused: data.generationPaused };
       for (const p of [data.self, data.host]) {
-        validateActor(p);
+        validateActor(p, this.info);
         this.players.set(p.id, p);
       }
       this.render();
@@ -453,11 +492,14 @@ export class Exploration {
     };
   }
   acceptState(p, state) {
-    validateActor(state);
+    validateActor(state, this.info);
     requireWorld(state.id === p.id, '玩家身份不匹配');
     if (this.scenes && state.epoch !== p.epoch) return;
     if (this.scenes)
-      requireWorld(state.sceneId === p.sceneId && sceneOf(state.pos) === p.sceneId, '玩家不能自行跨场景');
+      requireWorld(
+        state.sceneId === p.sceneId && sceneOf(state.pos, this.info) === p.sceneId,
+        '玩家不能自行跨场景',
+      );
     if (state.life < p.life) return;
     requireWorld(state.life === p.life, '玩家生命序号不匹配');
     if (!p.active || p.hp <= 0) return;
@@ -490,7 +532,6 @@ export class Exploration {
   }
   ready() {
     requireWorld(this.info && this.chunks?.loaded.size, '请先创建或加入世界并等待营地加载');
-    this.error = '';
     this.started = true;
     this.stage = 'pause';
     if (this.isHost) this.players.get(this.selfId).active = true;
@@ -531,16 +572,37 @@ export class Exploration {
   frontier(p) {
     if (!p.active || (this.scenes && p.sceneId !== 'outdoor')) return;
     const delta = [];
-    if (p.pos.x < 40 && p.velocity[0] < -0.1) delta.push([-1, 0]);
-    if (p.pos.x > 88 && p.velocity[0] > 0.1) delta.push([1, 0]);
-    if (p.pos.z < 40 && p.velocity[2] < -0.1) delta.push([0, -1]);
-    if (p.pos.z > 88 && p.velocity[2] > 0.1) delta.push([0, 1]);
+    // Start at the centre, not only after pressing into an unloaded edge. Load
+    // cardinals before diagonals so every new request has a persisted neighbour.
+    for (const d of [
+      [0, -1],
+      [1, 0],
+      [0, 1],
+      [-1, 0],
+    ])
+      delta.push(d);
+    if (this.info?.schemaVersion !== 2) delta.push([-1, -1], [1, -1], [-1, 1], [1, 1]);
+    delta.sort(
+      (a, b) =>
+        Math.hypot((a[0] + 0.5) * SIZE - p.pos.x, (a[1] + 0.5) * SIZE - p.pos.z) -
+        Math.hypot((b[0] + 0.5) * SIZE - p.pos.x, (b[1] + 0.5) * SIZE - p.pos.z),
+    );
     for (const [dx, dz] of delta) {
       const x = p.pos.cx + dx,
         z = p.pos.cz + dz,
         key = keyOf(x, z);
-      if (this.scenes && !outdoors(x, z)) continue;
+      if (this.info?.schemaVersion === 2 && !outdoors(x, z)) continue;
       if (this.failed.has(key) || this.requests.has(key) || this.chunks.loaded.has(key)) continue;
+      if (
+        !this.manifest.has(key) &&
+        ![
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+        ].some(([ox, oz]) => this.manifest.has(keyOf(x + ox, z + oz)))
+      )
+        continue;
       if (!this.manifest.has(key) && (this.progress.generationPaused || this.requests.size >= 4)) continue;
       void this.load(x, z, !this.manifest.has(key))
         .then(() => {
@@ -550,7 +612,7 @@ export class Exploration {
     }
   }
   sameLocalScene(position) {
-    return sceneOf(this.chunks.address(position)) === this.players.get(this.selfId)?.sceneId;
+    return sceneOf(this.chunks.address(position), this.info) === this.players.get(this.selfId)?.sceneId;
   }
   targets(position) {
     return [...this.players.values()]
@@ -558,7 +620,7 @@ export class Exploration {
         (p) =>
           p.active &&
           p.hp > 0 &&
-          (!this.scenes || !position || p.sceneId === sceneOf(this.chunks.address(position))),
+          (!this.scenes || !position || p.sceneId === sceneOf(this.chunks.address(position), this.info)),
       )
       .map((p) => (p.id === this.selfId ? this.ctx.player : this.remotes.get(p.id)))
       .filter(Boolean);
@@ -576,7 +638,7 @@ export class Exploration {
     if (p.id === this.selfId) return;
     let r = this.remotes.get(p.id);
     if (!r) {
-      r = new RemotePlayer(this.ctx, p.id, p.name, 0, INK.GREEN);
+      r = new RemotePlayer(this.ctx, p.id, p.name, 0, p.ink ?? INK.GREEN);
       r.onDamage = (_target, amount, from) => this.damagePlayer(p.id, amount, from);
       r.tryDeflect = (projectile) => {
         const player = this.players.get(p.id),
@@ -605,7 +667,10 @@ export class Exploration {
       r.center.copy(pos).add(new THREE.Vector3(0, p.flags & 1 ? 0.52 : 0.9, 0));
       r.eye.copy(pos).add(new THREE.Vector3(0, p.flags & 1 ? 0.88 : 1.6, 0));
     }
-    r.root.visible = p.active && nearby(p.pos, this.chunks.address(this.ctx.player.body.pos));
+    r.root.visible =
+      p.active &&
+      nearby(p.pos, this.chunks.address(this.ctx.player.body.pos)) &&
+      (!this.scenes || p.sceneId === this.players.get(this.selfId)?.sceneId);
     if (!r.root.visible) {
       r.rope.visible = false;
       r.hook.visible = false;
@@ -616,14 +681,20 @@ export class Exploration {
     this.remotes.delete(id);
   }
   stateFor(key, progress = this.progress) {
-    const b = this.scenes && buildingAt(...key.split(',').map(Number));
+    const b = this.info?.schemaVersion === 2 && buildingAt(...key.split(',').map(Number));
     return b
       ? (progress?.runs?.[b.id] ?? { ...freshProgress(), runId: 1 })
-      : (progress?.chunks?.[key] ?? freshProgress());
+      : (progress?.chunks?.[key] ?? {
+          ...freshProgress(),
+          ...(this.chunks?.loaded.get(key)?.block.layout.outpost?.encounterVersion === 1
+            ? { total: this.chunks.loaded.get(key).block.layout.outpost.spawns.length }
+            : {}),
+        });
   }
   setState(key, state) {
-    const b = this.scenes && buildingAt(...key.split(',').map(Number));
-    const valid = validateProgress(state);
+    const b = this.info?.schemaVersion === 2 && buildingAt(...key.split(',').map(Number));
+    const total = this.chunks?.loaded.get(key)?.block.layout.outpost?.spawns.length;
+    const valid = validateProgress(state, total ?? state?.total ?? 4);
     if (b) {
       requireWorld(Number.isSafeInteger(state.runId) && state.runId > 0, '挑战轮次无效');
       this.progress.runs[b.id] = { ...valid, runId: state.runId };
@@ -637,11 +708,13 @@ export class Exploration {
           (p) =>
             p.active &&
             p.hp > 0 &&
-            keyOf(p.pos.cx, p.pos.cz) === item.key &&
-            Math.hypot(
-              p.pos.x - item.block.layout.outpost.center[0],
-              p.pos.z - item.block.layout.outpost.center[1],
-            ) < 48,
+            (!this.scenes || p.sceneId === (item.block.layout.sceneId ?? 'outdoor')) &&
+            (item.block.layout.outpost.encounterVersion === 1 ||
+              (keyOf(p.pos.cx, p.pos.cz) === item.key &&
+                Math.hypot(
+                  p.pos.x - item.block.layout.outpost.center[0],
+                  p.pos.z - item.block.layout.outpost.center[1],
+                ) < 48)),
         )
       )
         continue;
@@ -649,13 +722,35 @@ export class Exploration {
         ...(this.stateFor(item.key).defeated ?? []),
         ...(this.pendingKills.get(item.key) ?? []),
       ]);
-      for (let index = 0; index < 4; index++) {
+      const outpost = item.block.layout.outpost;
+      const staggered = outpost.encounterVersion === 1;
+      const now = this.ctx.game?.time ?? 0;
+      for (let index = 0; index < outpost.spawns.length; index++) {
         const run = this.stateFor(item.key).runId;
         const id = `${item.key}:${run ?? 0}:${index}`;
         if (defeated.has(index) || this.ctx.enemies.byId.has(id)) continue;
-        const [x, z] = item.block.layout.outpost.spawns[index];
+        const [x, z] = outpost.spawns[index];
+        if (staggered) {
+          const roll = hash(`${this.info.seed}:${item.key}:${index}:arrival`);
+          const distances = [...this.players.values()]
+            .filter((p) => p.active && p.hp > 0 && (!this.scenes || p.sceneId === 'outdoor'))
+            .map((p) =>
+              Math.hypot(
+                (p.pos.cx - item.x) * SIZE + p.pos.x - x,
+                p.pos.y,
+                (p.pos.cz - item.z) * SIZE + p.pos.z - z,
+              ),
+            );
+          // Per-enemy proximity and staggered arrivals avoid a whole squad popping
+          // into view at the chunk centre, or appearing on top of a player.
+          if (!distances.some((d) => d <= 42 + (roll % 19)) || distances.some((d) => d < 10)) continue;
+          item.spawnAt ??= new Map();
+          if (!item.spawnAt.has(index)) item.spawnAt.set(index, now + 0.4 + (roll % 3600) / 1000);
+          if (now < item.spawnAt.get(index) || now < (item.nextSpawnAt ?? 0)) continue;
+          item.nextSpawnAt = now + 0.8 + (roll % 1400) / 1000;
+        }
         const e = this.ctx.enemies.spawn(
-          ENEMY_TYPES[index],
+          outpost.types?.[index] ?? ENEMY_TYPES[index],
           this.chunks.position({ cx: item.x, cz: item.z, x, y: 0, z }),
           id,
         );
@@ -673,15 +768,20 @@ export class Exploration {
     pending.add(enemy.spawnIndex);
     this.pendingKills.set(enemy.chunk, pending);
     const key = enemy.chunk;
+    const total =
+      this.chunks?.loaded.get(key)?.block.layout.outpost?.spawns.length ?? this.stateFor(key).total ?? 4;
     void this.save(
       () => {
         const defeated = [
           ...new Set([...(this.stateFor(key).defeated ?? []), ...(this.pendingKills.get(key) ?? [])]),
         ];
-        const b = this.scenes && buildingAt(...key.split(',').map(Number));
+        const b = this.info?.schemaVersion === 2 && buildingAt(...key.split(',').map(Number));
         return b
           ? { run: { buildingId: b.id, runId: enemy.runId, defeated, rewarded: defeated.length === 4 } }
-          : { chunk: key.split(',').map(Number), state: { defeated, rewarded: defeated.length === 4 } };
+          : {
+              chunk: key.split(',').map(Number),
+              state: { defeated, rewarded: defeated.length === total, ...(total !== 4 ? { total } : {}) },
+            };
       },
       (old, current) => {
         const pending = this.pendingKills.get(key);
@@ -766,14 +866,14 @@ export class Exploration {
     if (p.hp === 0) p.respawnAt = this.ctx.game.time + 2.5;
   }
   nearestSafe(pos) {
-    const b = this.scenes && buildingAt(pos.cx, pos.cz);
+    const b = this.info?.schemaVersion === 2 && buildingAt(pos.cx, pos.cz);
     if (b) pos = doorPosition(b);
     let result = { cx: 0, cz: 0, x: 64, y: 0, z: 64 },
       best = Infinity;
     for (const candidate of [
       result,
       ...Object.values(this.progress.chunks)
-        .filter((p) => p.defeated.length === 4 && p.safePosition)
+        .filter((p) => outpostComplete(p) && p.safePosition)
         .map((p) => p.safePosition),
     ]) {
       const distance = this.chunks.position(candidate).distanceToSquared(this.chunks.position(pos));
@@ -1004,7 +1104,9 @@ export class Exploration {
   }
   snapshot(id) {
     const p = this.players.get(id);
-    const relevant = (pos) => nearby(p.pos, this.chunks.address(pos));
+    const relevant = (pos) =>
+      nearby(p.pos, this.chunks.address(pos)) &&
+      (!this.scenes || sceneOf(this.chunks.address(pos), this.info) === p.sceneId);
     const enemies = this.ctx.enemies.enemies
       .filter((e) => e.alive && relevant(e.body.pos))
       .map((e) => ({
@@ -1028,7 +1130,7 @@ export class Exploration {
         ink: b.ink,
       }));
     const chunks = [...this.chunks.loaded.values()]
-      .filter((c) => nearby(p.pos, { cx: c.x, cz: c.z }))
+      .filter((c) => !c.block.layout.interiorVersion && nearby(p.pos, { cx: c.x, cz: c.z }))
       .map((c) => ({ key: c.key, state: this.stateFor(c.key) }));
     return {
       revision: ++this.snapshotRevision,
@@ -1055,7 +1157,7 @@ export class Exploration {
         Array.isArray(s.players) &&
         s.players.length <= 10 &&
         Array.isArray(s.enemies) &&
-        s.enemies.length <= 40 &&
+        s.enemies.length <= MAX_ENCOUNTER_ENEMIES * 9 &&
         Array.isArray(s.bullets) &&
         s.bullets.length <= 64 &&
         Array.isArray(s.chunks) &&
@@ -1065,7 +1167,7 @@ export class Exploration {
     if (s.revision <= this.acceptedRevision) return;
     this.acceptedRevision = s.revision;
     for (const p of s.players) {
-      validateActor(p);
+      validateActor(p, this.info);
       if (p.respawnTarget) validAddress(p.respawnTarget);
       requireWorld(
         Number.isFinite(p.hp) &&
@@ -1113,15 +1215,18 @@ export class Exploration {
     const present = new Set();
     for (const v of s.enemies) {
       if (this.scenes)
-        requireWorld(v.sceneId === self.sceneId && sceneOf(v.pos) === self.sceneId, '敌人场景不匹配');
+        requireWorld(
+          v.sceneId === self.sceneId && sceneOf(v.pos, this.info) === self.sceneId,
+          '敌人场景不匹配',
+        );
       if (this.scenes && v.runId && this.stateFor(v.chunk).runId !== v.runId) continue;
       validAddress(v.pos);
       requireWorld(
         typeof v.id === 'string' &&
-          ENEMY_TYPES.includes(v.type) &&
+          ENCOUNTER_TYPES.includes(v.type) &&
           Number.isFinite(v.hp) &&
           v.hp > 0 &&
-          v.hp <= 110 &&
+          v.hp <= TYPES[v.type].hp &&
           Number.isFinite(v.yaw),
         '敌人状态无效',
       );
@@ -1134,7 +1239,7 @@ export class Exploration {
       e.yaw = v.yaw;
       e.hp = v.hp;
       e.chunk = v.chunk;
-      e.sceneId = this.scenes ? sceneOf(v.pos) : 'outdoor';
+      e.sceneId = this.scenes ? sceneOf(v.pos, this.info) : 'outdoor';
       e.root.scale.setScalar(e.T.scale);
       e.state = 'hunt';
     }
@@ -1210,6 +1315,10 @@ export class Exploration {
     const actors = this.isHost ? [...this.players.values()] : [this.players.get(this.selfId)];
     const needed = new Set();
     for (const p of actors) {
+      if (this.info?.schemaVersion === 1) {
+        needed.add(dynamicScene(p.pos));
+        if (p.transition) needed.add(dynamicScene(p.transition.target));
+      }
       if (p.transition) needed.add(keyOf(p.transition.target.cx, p.transition.target.cz));
       if (p.respawnTarget) needed.add(keyOf(p.respawnTarget.cx, p.respawnTarget.cz));
       for (let x = p.pos.cx - 1; x <= p.pos.cx + 1; x++)
@@ -1239,13 +1348,15 @@ export class Exploration {
     }
     if (this.scenes?.prepared)
       needed.add(keyOf(this.scenes.prepared.target.cx, this.scenes.prepared.target.cz));
+    if (this.info?.schemaVersion === 1 && this.scenes?.prepared)
+      needed.add(dynamicScene(this.scenes.prepared.target));
     for (const key of this.pendingKills?.keys() ?? []) needed.add(key);
     let changed = false;
     for (const [key] of this.chunks.loaded) {
       if (needed.has(key) || this.saving || this.unsaved?.length) continue;
       for (const e of [...this.ctx.enemies.enemies]) if (e.chunk === key) this.removeEnemy(e);
       this.chunks.remove(key);
-      if (!this.isHost && this.net.connected) {
+      if (!this.isHost && this.net.connected && !key.startsWith('house_')) {
         const [x, z] = key.split(',').map(Number);
         this.packets.post(this.net.connections.keys().next().value, 'unloaded', { x, z });
       }
@@ -1314,11 +1425,13 @@ export class Exploration {
     if (!this.info || !this.chunks) return;
     const p = this.chunks.address(this.ctx.player.body.pos),
       key = keyOf(p.cx, p.cz),
-      item = this.chunks.loaded.get(key);
+      item =
+        this.chunks.loaded.get(this.info.schemaVersion === 1 ? dynamicScene(p) : key) ??
+        this.chunks.loaded.get(key);
     const state = this.stateFor(key);
-    this.label.textContent = `${item?.block.layout.name ?? '探索边界'} · ${item?.block.layout.interior ? `室内${item.block.layout.outpost ? ` · 第 ${state.runId} 轮` : ''}` : key}\n${key === '0,0' ? '安全营地' : item?.block.layout.interior && !item.block.layout.outpost ? '安全建筑' : state?.defeated.length === 4 ? '据点已清理' : `据点 ${state?.defeated.length ?? 0}/4`} · ${this.unsaved.length || this.hostStatus?.unsaved ? '未保存，请打开菜单重试' : this.saving || this.hostStatus?.saving ? '正在保存' : '已保存'}${this.requests.size || this.hostStatus?.generating ? '\n前方区域正在绘制…' : ''}${this.error ? `\n${this.error}` : ''}${this.scenes?.hint ? `\n${this.scenes.hint}` : ''}`;
+    this.label.textContent = `${item?.block.layout.name ?? '探索边界'} · ${item?.block.layout.interior ? `室内${item.block.layout.outpost ? ` · 第 ${state.runId} 轮` : ''}` : key}\n${key === '0,0' ? '安全营地' : item?.block.layout.interior && !item.block.layout.outpost ? '安全建筑' : outpostComplete(state) ? '据点已清理' : `据点 ${state?.defeated.length ?? 0}/${item?.block.layout.outpost?.spawns.length ?? state?.total ?? 4}`} · ${this.unsaved.length || this.hostStatus?.unsaved ? '未保存，请打开菜单重试' : this.saving || this.hostStatus?.saving ? '正在保存' : '已保存'}${this.requests.size || this.hostStatus?.generating ? '\n前方区域正在绘制…' : ''}${this.error ? `\n${this.error}` : ''}${this.scenes?.hint ? `\n${this.scenes.hint}` : ''}`;
     const c = this.map.getContext('2d');
-    if (this.scenes) {
+    if (this.info.schemaVersion === 2) {
       c.fillStyle = '#fffdf2';
       c.fillRect(0, 0, 150, 150);
       for (let x = 0; x < 2; x++)
@@ -1327,7 +1440,7 @@ export class Exploration {
             known = this.manifest.has(k);
           c.fillStyle = !known
             ? '#e3e1d9'
-            : k === '0,0' || this.progress.chunks[k]?.defeated.length === 4
+            : k === '0,0' || outpostComplete(this.progress.chunks[k])
               ? '#c4dbc0'
               : '#cad8e8';
           c.fillRect(5 + x * 70, 5 + z * 70, 68, 68);
@@ -1349,7 +1462,7 @@ export class Exploration {
       for (const a of this.players.values()) {
         const b = buildingAt(a.pos.cx, a.pos.cz),
           location = b ? doorPosition(b) : a.pos;
-        c.fillStyle = a.id === this.selfId ? '#152ea0' : '#df433e';
+        c.fillStyle = inkCSS(a.ink);
         c.beginPath();
         c.arc(
           5 + (location.cx + location.x / 128) * 70,
@@ -1371,12 +1484,12 @@ export class Exploration {
         c.strokeStyle = '#b8c1d0';
         c.strokeRect(5 + (dx + 3) * 20, 5 + (dz + 3) * 20, 18, 18);
         if (!this.manifest.has(k)) continue;
-        c.fillStyle = k === '0,0' || this.progress.chunks[k]?.defeated.length === 4 ? '#8cba88' : '#b5c8e4';
+        c.fillStyle = k === '0,0' || outpostComplete(this.progress.chunks[k]) ? '#8cba88' : '#b5c8e4';
         c.fillRect(5 + (dx + 3) * 20, 5 + (dz + 3) * 20, 18, 18);
       }
     for (const a of this.players.values())
       if (nearby(a.pos, p, 3)) {
-        c.fillStyle = a.id === this.selfId ? '#172e73' : '#db743b';
+        c.fillStyle = inkCSS(a.ink);
         c.beginPath();
         c.arc(
           5 + (a.pos.cx - p.cx + 3 + a.pos.x / 128) * 20,

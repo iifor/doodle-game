@@ -2,16 +2,10 @@
 // full-screen "pen on lined paper" pass draws outlines, hatching, paper grain and ruled lines.
 import * as THREE from 'three';
 import { disposeTree } from '../../shared/resources.js';
+import { INK, INK_PALETTE } from './colors.js';
+export { INK } from './colors.js';
 
-export const INK = { BLUE: 0, RED: 1, BLACK: 2, ORANGE: 3, GREEN: 4, PINK: 5 };
-export const INK_COLORS = [
-  new THREE.Vector3(0.1, 0.19, 0.76), // blue ballpoint
-  new THREE.Vector3(0.86, 0.12, 0.2), // red pen
-  new THREE.Vector3(0.18, 0.2, 0.26), // graphite
-  new THREE.Vector3(0.92, 0.55, 0.08), // orange highlighter
-  new THREE.Vector3(0.12, 0.6, 0.3), // green
-  new THREE.Vector3(0.9, 0.4, 0.66), // pink eraser
-];
+export const INK_COLORS = INK_PALETTE.map(({ rgb }) => new THREE.Vector3(...rgb));
 export const LIGHT_WORLD = new THREE.Vector3(0.38, 0.82, 0.42).normalize();
 export const shared = { uLightDir: { value: new THREE.Vector3(0, 1, 0) }, uTime: { value: 0 } };
 
@@ -101,7 +95,7 @@ uniform float uSlow;
 uniform float uLineSpacing;
 uniform float uLowHp;
 uniform vec3 uPaper;
-uniform vec3 uInks[6];
+uniform vec3 uInks[${INK_PALETTE.length}];
 uniform mat4 uInvProj;
 uniform mat4 uInvView;
 
@@ -114,8 +108,8 @@ float vnoise(vec2 p) {
 float linDepth(float z) { float zn = z * 2.0 - 1.0; return 2.0 * uNear * uFar / (uFar + uNear - zn * (uFar - uNear)); }
 vec3 inkColor(float id) {
   int i = int(id + 0.5);
-  if (i <= 0) return uInks[0]; if (i == 1) return uInks[1]; if (i == 2) return uInks[2];
-  if (i == 3) return uInks[3]; if (i == 4) return uInks[4]; return uInks[5];
+  ${INK_PALETTE.map((_, i) => `if (i == ${i}) return uInks[${i}];`).join('\n  ')}
+  return uInks[0];
 }
 float stripes(vec2 p, vec2 dir, float spacing, float width) {
   float t = dot(p, vec2(-dir.y, dir.x));

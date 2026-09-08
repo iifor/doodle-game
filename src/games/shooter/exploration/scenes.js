@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { PLOTS, buildingAt, doorPosition, entryPosition, sceneOf, validateWorldLayout } from './region.js';
 import { keyOf, checksum, requireWorld, validAddress } from './schema.js';
+import { enterableBuildings, dynamicScene, houseEntry, validateHouseBlock } from './interiors.js';
 
 export class BuildingScenes {
   constructor(session) {
@@ -11,6 +12,10 @@ export class BuildingScenes {
     this.serial = 0;
     this.requestSerial = 0;
     this.hint = '';
+    this.dynamic = session.info.schemaVersion === 1;
+  }
+  scene(p) {
+    return sceneOf(p, this.s.info);
   }
   atSupply(p) {
     return (
@@ -21,6 +26,27 @@ export class BuildingScenes {
     );
   }
   near(p, range = 6) {
+    if (!p) return null;
+    if (this.dynamic) {
+      const block = this.s.chunks.loaded.get(keyOf(p.pos.cx, p.pos.cz))?.block;
+      const id = dynamicScene(p.pos);
+      const interior = this.s.chunks.loaded.get(id)?.block;
+      return enterableBuildings(block)
+        .filter((b) => id === 'outdoor' || b.id === id)
+        .map((building) => {
+          const point =
+            id === 'outdoor'
+              ? building.door
+              : interior && houseEntry(interior.layout, interior.x, interior.z);
+          return {
+            building,
+            point,
+            distance: point ? Math.hypot(p.pos.x - point.x, p.pos.z - point.z, p.pos.y - point.y) : Infinity,
+          };
+        })
+        .filter((b) => b.distance <= Math.min(range, 2.8))
+        .sort((a, b) => a.distance - b.distance)[0];
+    }
     const inside = buildingAt(p.pos.cx, p.pos.cz);
     const candidates = inside ? [inside] : PLOTS.filter((b) => b.cx === p.pos.cx && b.cz === p.pos.cz);
     return candidates
@@ -42,7 +68,7 @@ export class BuildingScenes {
       .then((block) => {
         this.known.add(b.id);
         this.failed.delete(b.id);
-        s.manifest.add(keyOf(block.x, block.z));
+        if (!this.dynamic) s.manifest.add(keyOf(block.x, block.z));
         return block;
       })
       .catch((error) => {
@@ -59,8 +85,21 @@ export class BuildingScenes {
     if (s.isHost) Object.assign(s.players.get(s.selfId), s.packLocal());
     const p = s.players.get(s.selfId);
     if (!p?.active || p.hp <= 0) return;
+    if (this.dynamic && this.waitingUntil) {
+      this.waitingUntil = 0;
+      if (s.isHost) p.transition = null;
+      else s.packets.post(s.net.connections.keys().next().value, 'scene-cancel', { epoch: p.epoch });
+      return;
+    }
+    if (this.dynamic && !reset && this.near(p)) this.waitingUntil = Date.now() + 150000;
     const payload = { epoch: p.epoch, reset, seq: ++this.requestSerial };
-    if (s.isHost) void this.interact(p, payload).catch((e) => s.report(e.message));
+    if (this.dynamic) this.waitingSeq = payload.seq;
+    if (s.isHost)
+      void this.interact(p, payload)
+        .catch((e) => s.report(e.message))
+        .finally(() => {
+          if (!this.dynamic || this.waitingSeq === payload.seq) this.waitingUntil = 0;
+        });
     else {
       const host = s.net.connections.keys().next().value;
       s.packets.post(host, 'state', s.packLocal());
@@ -82,6 +121,7 @@ export class BuildingScenes {
       return;
     }
     const b = portal.building;
+    if (this.dynamic && data.reset) return;
     if (data.reset) {
       requireWorld(sceneOf(p.pos) === 'outdoor' && b.templateId === 'warehouse', '请在仓库门外重置挑战');
       requireWorld(
@@ -119,23 +159,36 @@ export class BuildingScenes {
     }
     if (p.transition || this.resetting) return;
     requireWorld(!s.saving && !s.unsaved.length, '请等待保存完成或重试保存，再进入建筑');
-    const target = p.sceneId === 'outdoor' ? entryPosition(b) : doorPosition(b);
+    let target = this.dynamic ? b.door : p.sceneId === 'outdoor' ? entryPosition(b) : doorPosition(b);
     const pending = {
       id: ++this.serial,
       epoch: p.epoch + 1,
       source: { ...p.pos },
       target,
       buildingId: b.id,
+      requestSeq: data.seq,
       expires: Date.now() + 150000,
     };
     p.transition = pending;
     try {
-      const block =
-        sceneOf(target) === 'outdoor'
-          ? await s.api.call(`/${s.info.id}/chunk/${keyOf(target.cx, target.cz)}`)
-          : await this.ensure(b, true);
+      const entering = p.sceneId === 'outdoor';
+      const block = !entering
+        ? await s.api.call(`/${s.info.id}/chunk/${keyOf(target.cx, target.cz)}`)
+        : await this.ensure(b, true);
+      if (this.dynamic && entering) {
+        await validateHouseBlock(block);
+        requireWorld(block.layout.buildingId === b.id, '目标建筑不匹配');
+        target = houseEntry(block.layout, block.x, block.z);
+        pending.target = target;
+      }
       if (!this.valid(p, pending)) {
         if (p.transition === pending) p.transition = null;
+        if (this.dynamic && p.id !== s.selfId)
+          s.packets.post(p.id, 'scene-error', {
+            seq: data.seq,
+            message: '已取消进入，完成的室内已缓存；靠近门后可再次进入',
+            epoch: p.epoch,
+          });
         return;
       }
       await s.chunks.add(block);
@@ -145,10 +198,23 @@ export class BuildingScenes {
         this.commit(p, pending);
       } else {
         p.sent.set(keyOf(block.x, block.z), block.checksum);
-        s.packets.post(p.id, 'scene-prepare', { id: pending.id, epoch: pending.epoch, block, state, target });
+        s.packets.post(p.id, 'scene-prepare', {
+          id: pending.id,
+          epoch: pending.epoch,
+          seq: data.seq,
+          block,
+          state,
+          target,
+        });
       }
     } catch (error) {
       if (p.transition === pending) p.transition = null;
+      if (this.dynamic && p.id !== s.selfId)
+        s.packets.post(p.id, 'scene-error', {
+          message: error.message.slice(0, 300),
+          epoch: p.epoch,
+          seq: data.seq,
+        });
       throw error;
     }
   }
@@ -161,7 +227,7 @@ export class BuildingScenes {
       p.hp > 0 &&
       Date.now() < pending.expires &&
       p.epoch + 1 === pending.epoch &&
-      p.sceneId === sceneOf(pending.source) &&
+      p.sceneId === this.scene(pending.source) &&
       this.s.chunks.position(p.pos).distanceTo(this.s.chunks.position(pending.source)) < 6
     );
   }
@@ -171,7 +237,7 @@ export class BuildingScenes {
       return;
     }
     p.pos = pending.target;
-    p.sceneId = sceneOf(p.pos);
+    p.sceneId = this.scene(p.pos);
     p.epoch = pending.epoch;
     p.transition = null;
     p.velocity = [0, 0, 0];
@@ -201,14 +267,25 @@ export class BuildingScenes {
     player._updateCamera(0);
     s.ctx.effects.clear();
     this.prepared = null;
+    this.waitingUntil = 0;
     s.chunks.visible(player.body.pos);
   }
   async receive(type, data, from) {
     const s = this.s;
     if (s.isHost) {
       const p = s.players.get(from);
-      if (type === 'interact') {
-        void this.interact(p, data).catch((e) => s.report(e.message));
+      if (type === 'scene-cancel' && this.dynamic) {
+        if (p.epoch === data.epoch) p.transition = null;
+      } else if (type === 'interact') {
+        void this.interact(p, data).catch((e) => {
+          s.report(e.message);
+          if (this.dynamic)
+            s.packets.post(p.id, 'scene-error', {
+              message: e.message.slice(0, 300),
+              epoch: p.epoch,
+              seq: data.seq,
+            });
+        });
       } else if (type === 'scene-loaded') {
         const pending = p.transition;
         if (!pending || data.id !== pending.id || data.epoch !== pending.epoch) return;
@@ -219,13 +296,27 @@ export class BuildingScenes {
       } else throw new Error('访客不能决定场景切换');
       return;
     }
-    if (type === 'scene-prepare') {
+    if (type === 'scene-error' && this.dynamic) {
+      if (data.epoch === s.players.get(s.selfId).epoch && data.seq === this.waitingSeq) {
+        this.waitingUntil = 0;
+        this.prepared = null;
+        s.report(String(data.message).slice(0, 300));
+      }
+    } else if (type === 'scene-prepare') {
       const p = s.players.get(s.selfId),
         block = data.block;
+      if (this.dynamic && (!this.waitingUntil || data.seq !== this.waitingSeq)) return;
       if (!Number.isSafeInteger(data.id) || data.epoch !== p.epoch + 1) return;
       validAddress(data.target);
       requireWorld(block.x === data.target.cx && block.z === data.target.cz, '目标场景不匹配');
-      const layout = validateWorldLayout(block.layout, s.info, block.x, block.z);
+      if (block.layout.interiorVersion) {
+        requireWorld(this.dynamic, '世界室内版本不匹配');
+        await validateHouseBlock(block);
+        requireWorld(this.scene(data.target) === block.layout.sceneId, '目标室内不匹配');
+      }
+      const layout = block.layout.interiorVersion
+        ? block.layout
+        : validateWorldLayout(block.layout, s.info, block.x, block.z);
       requireWorld((await checksum(layout)) === block.checksum, '室内地图校验失败');
       await s.chunks.add(block);
       s.setState(keyOf(block.x, block.z), data.state);
@@ -238,7 +329,7 @@ export class BuildingScenes {
         '场景确认目标不匹配',
       );
       const p = s.players.get(s.selfId);
-      Object.assign(p, { pos: data.target, sceneId: sceneOf(data.target), epoch: data.epoch });
+      Object.assign(p, { pos: data.target, sceneId: this.scene(data.target), epoch: data.epoch });
       this.place(p);
     } else throw new Error('场景消息无效');
   }
@@ -246,6 +337,34 @@ export class BuildingScenes {
     const s = this.s;
     if (this.prepared && Date.now() > this.prepared.expires) this.prepared = null;
     if (!s.started) return;
+    if (this.dynamic) {
+      for (const p of s.players.values())
+        if (p.transition && !this.valid(p, p.transition)) {
+          if (s.isHost && p.id !== s.selfId)
+            s.packets.post(p.id, 'scene-error', {
+              message: '进入已取消，请靠近门重试',
+              epoch: p.epoch,
+              seq: p.transition.requestSeq,
+            });
+          p.transition = null;
+        }
+      const self = s.players.get(s.selfId),
+        near = this.near(self);
+      const busy = Date.now() < (this.waitingUntil ?? 0) && (!s.isHost || !!self?.transition);
+      if (!busy) this.waitingUntil = 0;
+      this.hint = near
+        ? `${near.building.title} · E ${self.sceneId === 'outdoor' ? '进入' : '返回街道'}`
+        : '';
+      if (this.failed.has(near?.building.id)) this.hint += '\n上次生成失败 · E 重试';
+      if (s.loading) {
+        s.loading.hidden = !busy;
+        s.loadingText.textContent =
+          self?.sceneId === 'outdoor' ? '正在准备房间、窗户与楼梯…' : '正在返回街道…';
+      }
+      if (busy) this.hint = '正在打开建筑 · E 取消进入 · 移开可取消；已完成的生成仍会保存';
+      if (s.ctx.game.state === 'play' && s.ctx.input.pressed('interact')) this.request();
+      return;
+    }
     for (const p of s.players.values()) {
       if (p.transition && !this.valid(p, p.transition)) p.transition = null;
       if (!s.isHost || !p.active || p.hp <= 0 || p.sceneId !== 'outdoor') continue;
@@ -258,9 +377,9 @@ export class BuildingScenes {
     const self = s.players.get(s.selfId),
       near = this.near(self);
     this.hint = near
-      ? `${near.building.title} · B ${self.sceneId === 'outdoor' ? '进入' : '返回街道'}${near.building.templateId === 'warehouse' && self.sceneId === 'outdoor' ? ' · N 重置挑战' : ''}`
+      ? `${near.building.title} · E ${self.sceneId === 'outdoor' ? '进入' : '返回街道'}${near.building.templateId === 'warehouse' && self.sceneId === 'outdoor' ? ' · N 重置挑战' : ''}`
       : this.atSupply(self)
-        ? 'B 营地补给（每10秒可补充一次） · 沿道路探索街坊'
+        ? 'E 营地补给（每10秒可补充一次） · 沿道路探索街坊'
         : '';
     if (self.transition || this.jobs.size || this.prepared) this.hint += '\n正在准备室内，可继续探索街道…';
     if (s.ctx.game.state === 'play') {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Settings } from './Settings.jsx';
 import { Controls } from './Controls.jsx';
 import './world.css';
+import { inkCSS, inkName } from '../colors.js';
 
 export function WorldMenu({ view }) {
   const {
@@ -34,7 +35,10 @@ export function WorldMenu({ view }) {
         <h1 id="world-title" ref={heading} tabIndex={-1}>
           {info?.name ?? '开放世界'}
         </h1>
-        <h2>边走边画 · 探索城镇 · 合作清理据点</h2>
+        <h2>AI 持续生成 · 自由探索 · 合作战斗</h2>
+        {info?.schemaVersion === 1 && (
+          <p>寻找橙色住宅门，靠近按 E 进入。首次生成室内并保存，重访读取缓存；在室内入口按 E 返回街道。</p>
+        )}
         {info?.region && (
           <p>
             {info.region.name} · {info.region.background}
@@ -74,7 +78,7 @@ export function WorldMenu({ view }) {
                     disabled={busy || !name.trim()}
                     onClick={() => actions.load(world.id, name.trim())}
                   >
-                    {world.name} {world.schemaVersion === 1 ? '（旧版世界）' : '（小区域）'}
+                    {world.name} {world.schemaVersion === 1 ? '（持续探索）' : '（旧版小区域）'}
                     <small>{new Date(world.createdAt).toLocaleDateString('zh-CN')}</small>
                   </button>
                 ))}
@@ -99,7 +103,10 @@ export function WorldMenu({ view }) {
               </label>
               <button disabled={busy || !code.trim() || !name.trim()}>加入朋友</button>
             </form>
-            <p>小区域含七栋可进入建筑，AI 基于模板设计变化并保存到房主电脑。朋友只需房间码和同版本游戏。</p>
+            <p>
+              AI
+              随探索生成新的街区、建筑与敌人据点，没有固定地图尽头。世界保存到房主电脑，朋友可用房间码加入。
+            </p>
           </>
         ) : (
           <>
@@ -111,7 +118,13 @@ export function WorldMenu({ view }) {
                 邀请朋友：<strong>{roomCode}</strong>
               </p>
             )}
-            <p>{players.map((p) => p.name).join(' · ')}</p>
+            <p>
+              {players.map((p) => (
+                <span key={p.id} style={{ marginRight: '1em' }}>
+                  <span style={{ color: inkCSS(p.ink) }}>● {inkName(p.ink)}</span> · {p.name}
+                </span>
+              ))}
+            </p>
             <div className="online-buttons">
               {stage !== 'disconnected' && (
                 <button className="start" disabled={busy || !canEnter} onClick={actions.resume}>
@@ -132,7 +145,9 @@ export function WorldMenu({ view }) {
             {host && (
               <p>
                 {saving ? '正在保存…' : unsaved ? '有未保存进度' : '探索进度已保存'} ·
-                户外据点永久安全，仓库可在门外重置
+                {info?.schemaVersion === 2
+                  ? '户外据点永久安全，仓库可在门外重置'
+                  : '继续前进，发现新的街区与敌人据点'}
               </p>
             )}
             <Controls exploration />

@@ -14,6 +14,8 @@ import { RemotePlayer } from '../src/games/shooter/online/remote-player.js';
 import { World, makeBody } from '../src/games/shooter/physics.js';
 import { buildLevel } from '../src/games/shooter/level.js';
 import { disposeTree } from '../src/shared/resources.js';
+import { CHARACTER_INKS, enemyInk, INK } from '../src/games/shooter/colors.js';
+import { EnemyManager } from '../src/games/shooter/enemies/manager.js';
 
 function arena() {
   const world = new World();
@@ -43,6 +45,55 @@ function arena() {
   command('guest', 'state', { snap: [0, 0, 0, Math.PI, 0, 0, 80, 110, 0, 0, 0] });
   return { match, command, events };
 }
+
+test('ten-player colours remain unique and stable through respawns, new rounds and replacement joins', () => {
+  const { match } = arena();
+  for (let i = 2; i < 10; i++) match.add(`p${i}`, `玩家${i}`);
+  const before = new Map([...match.players.values()].map((p) => [p.id, p.ink]));
+  assert.equal(new Set(before.values()).size, 10);
+  match.spawn(match.players.get('guest'));
+  match.lobby();
+  match.start();
+  assert.deepEqual(new Map([...match.players.values()].map((p) => [p.id, p.ink])), before);
+  match.remove('p5');
+  assert.equal(match.add('replacement', '新玩家').ink, before.get('p5'));
+  const state = match.snapshot();
+  validateRoom(state);
+  assert.equal(new Set(state.players.map((p) => p.ink)).size, 10);
+  const ctx = { scene: new THREE.Scene() };
+  for (const p of state.players) {
+    const remote = new RemotePlayer(ctx, p.id, p.name, 0, p.ink);
+    remote.push(p.snap, 0);
+    assert.equal(remote.mat.uniforms.uInk.value, p.ink);
+    remote.push([...p.snap.slice(0, 6), 0, ...p.snap.slice(7)], 1);
+    remote.push(p.snap, 2);
+    assert.equal(remote.mat.uniforms.uInk.value, p.ink);
+    remote.dispose();
+  }
+  state.players[0].ink = 99;
+  assert.throws(() => validateRoom(state), /颜色/);
+});
+
+test('enemy models use ten stable colours including respawns and keep special enemy signature colours', () => {
+  const ctx = { scene: new THREE.Scene(), effects: { strokeBurst() {} } },
+    manager = new EnemyManager(ctx);
+  try {
+    const ids = Array.from({ length: 10 }, (_, i) => `1,0:0:${i}`);
+    const colours = ids.map((id) => manager.spawn('grunt', new THREE.Vector3(), id).mat.inkId);
+    assert.equal(new Set(colours).size, 10);
+    assert.ok(colours.every((ink) => CHARACTER_INKS.includes(ink)));
+    manager.clear();
+    assert.deepEqual(
+      ids.map((id) => manager.spawn('grunt', new THREE.Vector3(), id).mat.inkId),
+      colours,
+    );
+    assert.equal(enemyInk('1,0:0:3'), enemyInk('1,0:0:3'));
+    assert.equal(manager.spawn('bomber', new THREE.Vector3()).T.ink, INK.BLACK);
+  } finally {
+    manager.clear();
+    disposeTree(ctx.scene);
+  }
+});
 
 test('network boundaries reject malformed, oversized, version-mismatched and non-finite input', () => {
   validateName('<img src=x>'); // Allowed text is rendered as text, not HTML.
