@@ -1,1 +1,34 @@
-test
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.js'
+      - 'public/**'
+      - 'docs/**'
+      - '!README.md'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger deploy on server via SSH
+        env:
+          HOST: ${{ secrets.DOODLE_HOST }}
+          USER: ${{ secrets.DOODLE_USER }}
+          KEY: ${{ secrets.DOODLE_DEPLOY_KEY }}
+        run: |
+          echo "$KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          # 受限密钥:SSH 连接即自动执行服务器上的部署脚本(forced command)
+          ssh -i /tmp/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o BatchMode=yes \
+              -o ConnectTimeout=15 \
+              ${USER}@${HOST} deploy
