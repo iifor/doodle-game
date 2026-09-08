@@ -129,11 +129,11 @@ export class Projectiles {
         // every peer runs the same projectile; only the local player takes damage from it here,
         // other players just make it disappear on this screen (their own client handles them)
         let consumed = false;
-        for (const P of mgr.targets()) {
+        for (const P of mgr.targets(p.pos)) {
           if (!P.alive) continue;
           const catchR = Math.max(p.blast ? 0.9 : 0.5, P.isLocal ? P.blockRadius : 0);
           if (!this._segHitsPlayer(p.prev, p.pos, P, catchR)) continue;
-          if (P.isLocal) {
+          if (P.isLocal || ctx.exploration?.isHost) {
             const def = P.tryDeflect(p);
             if (def) {
               if (def.ret) {
@@ -176,20 +176,23 @@ export class Projectiles {
       list[n++] = p;
     }
     list.length = n;
+    let visible = 0;
     for (let i = 0; i < n; i++) {
       const p = list[i];
+      if (ctx.exploration?.scenes && !ctx.exploration.sameLocalScene(p.pos)) continue;
       const sp = p.vel.length();
       _v.copy(p.vel).divideScalar(sp);
       _q.setFromUnitVectors(_up, _v);
       _s.set(p.thick, p.blast ? p.thick : clamp(sp * 0.02, 0.35, 0.9), p.thick);
       _m.compose(p.pos, _q, _s);
-      this.mesh.setMatrixAt(i, _m);
+      this.mesh.setMatrixAt(visible, _m);
       const c = this.mesh.instanceColor.array;
-      c[i * 3] = p.ink;
-      c[i * 3 + 1] = 1;
-      c[i * 3 + 2] = 0;
+      c[visible * 3] = p.ink;
+      c[visible * 3 + 1] = 1;
+      c[visible * 3 + 2] = 0;
+      visible++;
     }
-    this.mesh.count = n;
+    this.mesh.count = visible;
     this.mesh.instanceMatrix.needsUpdate = true;
     this.mesh.instanceColor.needsUpdate = true;
   }

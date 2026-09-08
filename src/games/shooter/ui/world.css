@@ -1,0 +1,49 @@
+.world-panel form {
+  margin: 12px 0;
+}
+.exploration .hud-tl,
+.exploration .hud-tr {
+  display: none;
+}
+.world-saves {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0;
+}
+.world-saves button {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.world-saves small {
+  font-family: sans-serif;
+  font-size: 12px;
+}
+.world-hud {
+  position: absolute;
+  left: 16px;
+  top: 70px;
+  z-index: 8;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  pointer-events: none;
+  color: #18356c;
+  font: 13px/1.5 sans-serif;
+  white-space: pre-line;
+  max-width: calc(100% - 32px);
+}
+.world-hud[hidden] {
+  display: none;
+}
+.world-hud > div {
+  max-width: 280px;
+  padding: 7px 10px;
+  background: #fffdf2e8;
+  border: 1px solid #5874a6;
+}
+.world-hud canvas {
+  width: 105px;
+  height: 105px;
+  border: 1px solid #5874a6;
+}

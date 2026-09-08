@@ -6,7 +6,7 @@ import { audio } from '../audio.js';
 import { ViewModel, bx, cyl, sph, frame, hand, makeFlash } from './model.js';
 const _v = new THREE.Vector3(),
   _v2 = new THREE.Vector3();
-const GUNS = {
+export const GUNS = {
   rifle: {
     name: '步枪',
     hint: '全自动射击 · 将红点对准敌人',
@@ -357,7 +357,14 @@ export class Gun extends ViewModel {
           this.falloff[2],
           1,
         );
-      ctx.enemies.damage(hitE.enemy, d, { point: hitE.point, dir, part: hitE.part, source: this.kind, crit });
+      if (!ctx.exploration)
+        ctx.enemies.damage(hitE.enemy, d, {
+          point: hitE.point,
+          dir,
+          part: hitE.part,
+          source: this.kind,
+          crit,
+        });
       hit = true;
     } else if (hitW) {
       end = hitW.point;

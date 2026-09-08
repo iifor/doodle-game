@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-export function Settings({ prefs, onChange }) {
+export function Settings({ prefs, onChange, desktop = false }) {
   const [values, setValues] = useState(() => ({
     sensitivity: prefs.get('sensitivity'),
     invert: prefs.get('invert'),
@@ -27,18 +27,20 @@ export function Settings({ prefs, onChange }) {
         />
         <b>{values.sensitivity}%</b>
       </label>
-      <label>
-        触屏灵敏度
-        <input
-          type="range"
-          min="25"
-          max="250"
-          step="5"
-          value={values.touchSensitivity}
-          onChange={(event) => change('touchSensitivity', Number(event.target.value))}
-        />
-        <b>{values.touchSensitivity}%</b>
-      </label>
+      {!desktop && (
+        <label>
+          触屏灵敏度
+          <input
+            type="range"
+            min="25"
+            max="250"
+            step="5"
+            value={values.touchSensitivity}
+            onChange={(event) => change('touchSensitivity', Number(event.target.value))}
+          />
+          <b>{values.touchSensitivity}%</b>
+        </label>
+      )}
       <label>
         画质
         <select value={values.quality} onChange={(event) => change('quality', event.target.value)}>

@@ -57,6 +57,7 @@ export function ShooterMenu({ view }) {
             )}
           </button>
           {kind === 'start' && <button onClick={actions.online}>联机对战</button>}
+          {kind === 'start' && <button onClick={actions.explore}>开放世界</button>}
           {kind !== 'start' && <button onClick={actions.menu}>返回主菜单</button>}
         </div>
         {error && <p role="alert">{error}</p>}

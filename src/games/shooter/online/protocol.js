@@ -36,13 +36,13 @@ export function validateCode(code) {
   );
   return code;
 }
-export function validateSnap(s) {
+export function validateSnap(s, bound = 100) {
   requireValue(
     Array.isArray(s) && [11, 14].includes(s.length) && s.every(Number.isFinite),
     '玩家状态格式不正确',
   );
   requireValue(
-    s.slice(0, 3).every((n) => finite(n, -100, 100)),
+    s.slice(0, 3).every((n) => finite(n, -bound, bound)),
     '玩家坐标越界',
   );
   requireValue(
@@ -60,7 +60,7 @@ export function validateSnap(s) {
   requireValue(!!(s[6] & 128) === (s.length === 14), '钩索状态长度不一致');
   if (s.length === 14)
     requireValue(
-      s.slice(11).every((n) => finite(n, -150, 150)),
+      s.slice(11).every((n) => finite(n, -Math.max(150, bound), Math.max(150, bound))),
       '钩索坐标越界',
     );
 }

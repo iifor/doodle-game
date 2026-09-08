@@ -199,14 +199,15 @@ export class Katana extends ViewModel {
       any = true;
       const point = h.enemy.center.clone();
       point.y += rand(-0.2, 0.4);
-      ctx.enemies.damage(h.enemy, this.damage, {
-        point,
-        dir: _v2.clone(),
-        part: 'torso',
-        source: 'katana',
-        crit: false,
-        slashDir: s,
-      });
+      if (!ctx.exploration)
+        ctx.enemies.damage(h.enemy, this.damage, {
+          point,
+          dir: _v2.clone(),
+          part: 'torso',
+          source: 'katana',
+          crit: false,
+          slashDir: s,
+        });
     }
     for (const br of ctx.breakablesInArc(P.eye, P.forward, 3.2, Math.cos(1.0))) {
       any = true;

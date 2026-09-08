@@ -1,6 +1,6 @@
 # Doodle Game
 
-基于本地 `doodleshooter` 复刻的模块化游戏项目。当前提供 **Doodle District 单人生存射击与联机自由混战**，React 管理菜单与设置，Three.js 管理游戏场景与实时循环。
+基于本地 `doodleshooter` 复刻的模块化游戏项目。当前提供 **Doodle District 单人生存射击、联机自由混战与 PC 开放世界**，React 管理菜单与设置，Three.js 管理游戏场景与实时循环。
 
 ## 运行
 
@@ -29,7 +29,7 @@ npm run dev -- --port 5180
 - 7 种普通敌人、3 种轮换 Boss、波次、连击、补给与检查点。
 - React 开始、暂停、死亡菜单；设置、操作说明；独立的实时 HUD。
 
-原仓库的 Mexico 地图在源码中标记为未就绪。保留其独立构建模块，但第一版菜单及存档校验只开放 District。已接入私人/公开房间和最多 10 人 PVP 自由混战，以及手机横屏触屏操作；其它玩法尚未开放。联机运行方法见 [联机说明](docs/multiplayer.md)，手机操作与兼容验证见 [手机版说明](docs/mobile.md)。
+原仓库的 Mexico 地图在源码中标记为未就绪。保留其独立构建模块，但第一版菜单及存档校验只开放 District。已接入私人/公开房间和最多 10 人 PVP 自由混战，以及手机横屏触屏操作。新增 DeepSeek 驱动的持久合作开放世界，PC 启动、密钥与备份方法见 [开放世界说明](docs/open-world.md)。联机运行方法见 [联机说明](docs/multiplayer.md)，手机操作与兼容验证见 [手机版说明](docs/mobile.md)。
 
 ## 工程结构
 
@@ -40,6 +40,7 @@ src/
     index.js            # 会话装配、状态转换、帧循环、卸载
     preferences.js      # 射击玩法的存档版本、字段及校验
     ui/                 # React 菜单/房间/设置/操作说明；独立 DOM HUD
+    exploration/        # 区块校验、加载、开放世界协议与合作会话
     online/             # 连接、协议校验、房主裁定、远端人物与游戏接入
     systems/            # 波次与积分、专注斩、补给与可破坏物
     enemies/            # 类型配置、模型、弹道、AI 与生命周期
@@ -53,7 +54,8 @@ src/
     effects.js          # 粒子、弹痕与碎片
     audio.js            # 程序化音效与音乐
   shared/resources.js   # Three.js 子树资源释放
-tests/shooter.test.js   # 原生 Node 回归检查
+server/                # 本机 DeepSeek 生成与原子文件存档
+tests/                 # 原生 Node 回归检查
 ```
 
 React 只接收菜单状态变化，不接收每帧坐标或弹药更新。实时 HUD 和游戏循环由射击会话独立维护。新增玩法在 `src/games/<玩法>/` 建立独立目录，再从应用入口接入；出现第二个实际使用者后再提取共用模块。详见 [模块边界](docs/architecture.md)。
@@ -85,3 +87,5 @@ npm run preview       # 预览 dist，默认 4173
 标题、主按钮与武器名称使用 [霞鹜文楷屏幕阅读版](https://github.com/lxgw/LxgwWenKai-Screen)（简体字形）；说明、表单与战斗数据使用系统黑体。通过锁定版本的 `lxgw-wenkai-screen-webfont` 引入单套 WOFF2 分片，浏览器按用字加载，字体随构建部署，不依赖外部字体服务。字体与 Webfont 打包许可保留在 [字体许可](public/licenses/lxgw-wenkai-screen.txt)，构建时一并复制到 `dist/licenses/`。
 
 玩法、程序化美术和音效移植自用户提供的本地 `/Users/wuqingfu/Desktop/ifor/doodleshooter`，参考提交 `faf3e906f87e384639f2d9ab8b1568280d57c889`。原目录未修改。本项目保留原作的核心手感，界面和游戏提示使用简体中文，并补充工程组织、React 界面、清理逻辑和验证。
+
+开放世界新存档提供 **256×256 米的小区域与七栋可进入建筑**：AI 基于商店、住宅、仓库模板设计变化；B 进入／退出，N 在无人仓库门外重置挑战。旧世界保留原玩法。配置与真实生成验证见 [开放世界说明](docs/open-world.md)。

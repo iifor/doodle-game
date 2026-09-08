@@ -282,6 +282,8 @@ export class Player {
     for (const w of this.weapons) if (w.isGun) w.addAmmo(Math.round(w.maxReserve * frac));
   }
   takeDamage(amount, fromPos) {
+    if (this.ctx.exploration && !this.ctx.exploration.applyingDamage)
+      return this.ctx.exploration.damagePlayer(this.ctx.exploration.selfId, amount, fromPos);
     if (!Number.isFinite(amount) || amount < 0) throw new RangeError(`Invalid player damage: ${amount}`);
     if (!this.alive) return;
     this.hp -= amount;
@@ -578,7 +580,7 @@ export class Player {
     const spd = b.vel.length();
     if (spd > 48) b.vel.multiplyScalar(48 / spd);
     ctx.world.moveBody(b, dt);
-    if (b.pos.y < -12 || Math.abs(b.pos.x) > 95 || Math.abs(b.pos.z) > 95) {
+    if (b.pos.y < -12 || (!ctx.exploration && (Math.abs(b.pos.x) > 95 || Math.abs(b.pos.z) > 95))) {
       this.detachGrapple(false);
       b.pos.copy(ctx.level.playerStart);
       b.vel.set(0, 0, 0);
@@ -851,7 +853,7 @@ export class Player {
     audio.explosion(c);
     ctx.input.rumble(0.9, 0.9, 220);
     // bots: the thrower's client reports the damage (host applies it; a client's report is forwarded)
-    if (n.mine) ctx.enemies.blastEnemies(c, R, 120, null);
+    if (n.mine && !ctx.exploration) ctx.enemies.blastEnemies(c, R, 120, null);
     if (n.mine) ctx.blastBreakables(c, R);
     // me: my own grenade, or anyone else's that went off on my screen
     const d = this.center.distanceTo(c);

@@ -15,8 +15,8 @@ const TIMEOUT = 15000;
 
 // Reliable star topology. A sender's identity always comes from its DataConnection.
 export class Transport {
-  constructor({ onJoin, onLeave, onMessage, onError, peerOptions = {} }) {
-    Object.assign(this, { onJoin, onLeave, onMessage, onError, peerOptions });
+  constructor({ onJoin, onLeave, onMessage, onError, peerOptions = {}, prefix = ROOM_PREFIX }) {
+    Object.assign(this, { onJoin, onLeave, onMessage, onError, peerOptions, prefix });
     this.connections = new Map();
     this.pending = new Set();
     this.generation = 0;
@@ -37,7 +37,7 @@ export class Transport {
         const codes = isPublic ? Array.from({ length: 16 }, (_, i) => `PUB${i}`) : [randomCode()];
         for (const candidate of codes) {
           try {
-            await this.createPeer(Peer, ROOM_PREFIX + candidate, generation);
+            await this.createPeer(Peer, this.prefix + candidate, generation);
             this.code = candidate;
             break;
           } catch (error) {
@@ -57,7 +57,7 @@ export class Transport {
             reject(error);
           };
           this.rejectJoin = fail;
-          const conn = this.peer.connect(ROOM_PREFIX + code, {
+          const conn = this.peer.connect(this.prefix + code, {
             reliable: true,
             serialization: 'json',
             metadata: { v: VERSION, name },
@@ -221,7 +221,7 @@ export class Transport {
   }
   sendHost(data) {
     requireValue(!this.isHost && this.connected, '尚未连接房主');
-    this.sendTo(ROOM_PREFIX + this.code, data);
+    this.sendTo(this.prefix + this.code, data);
   }
   drop(id, reason) {
     const entry = this.connections.get(id);

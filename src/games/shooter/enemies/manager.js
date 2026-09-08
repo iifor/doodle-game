@@ -34,10 +34,11 @@ export class EnemyManager {
     this.byId = new Map();
   }
   // Everyone an enemy may go after. Solo play is just the local player.
-  targets() {
-    return [this.ctx.player];
+  targets(position) {
+    return this.ctx.exploration ? this.ctx.exploration.targets(position) : [this.ctx.player];
   }
   _pickTarget(e, dt) {
+    if (this.ctx.exploration) return this.ctx.exploration.pickTarget(e);
     e.retargetT = (e.retargetT ?? 0) - dt;
     if (e.target && e.target.alive && e.retargetT > 0) return e.target;
     e.retargetT = 0.5;
@@ -242,7 +243,11 @@ export class EnemyManager {
       });
     }
   }
-  yank(e, target) {
+  yank(e, target, authoritative = false) {
+    if (this.ctx.exploration && !authoritative) {
+      this.ctx.exploration.sendAction('yank', { enemy: e.id });
+      return;
+    }
     if (!e.alive) return;
     if (e.T.boss) {
       e.flinch = 1;
@@ -263,7 +268,7 @@ export class EnemyManager {
   }
   damage(e, amount, info) {
     if (!Number.isFinite(amount) || amount < 0) throw new RangeError(`Invalid enemy damage: ${amount}`);
-    if (!e.alive) return;
+    if (!e.alive || (this.ctx.exploration && !this.ctx.exploration.isHost)) return;
     if (info.part === 'shield') {
       this.ctx.effects.sparks(info.point, info.dir ? info.dir.clone().negate() : _up, INK.ORANGE, 8, 8);
       audio.shieldHit(info.point);
@@ -450,6 +455,10 @@ export class EnemyManager {
     return out.setFromMatrixPosition(e.parts.head.matrixWorld);
   }
   update(dt) {
+    if (this.ctx.exploration && !this.ctx.exploration.isHost) {
+      this.ctx.exploration.animateEnemies(dt);
+      return;
+    }
     const ctx = this.ctx,
       world = ctx.world;
     for (const e of this.enemies) {

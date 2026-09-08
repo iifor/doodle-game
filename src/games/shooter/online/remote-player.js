@@ -171,7 +171,7 @@ export class RemotePlayer {
     buildWeaponProp(gun, this.mat, this.solid, { weapon: WEAPON_KINDS[i] });
   }
   push(snap, t) {
-    validateSnap(snap);
+    validateSnap(snap, this.ctx.exploration ? 3e8 : 100);
     this.snapA = this.snapB || {
       p: new THREE.Vector3(snap[0], snap[1], snap[2]),
       yaw: snap[3],

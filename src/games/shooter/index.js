@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Exploration } from './exploration/session.js';
 import { Multiplayer } from './online/multiplayer.js';
 import { InkRenderer } from './render.js';
 import { World } from './physics.js';
@@ -19,7 +20,7 @@ import { createPreferences } from './preferences.js';
 import { disposeTree } from '../../shared/resources.js';
 
 // One mounted game owns its listeners, animation frame, scene and audio lifetime.
-export function mountShooter(canvas, root, onMenu, touchRoot) {
+export function mountShooter(canvas, root, onMenu, touchRoot, options = {}) {
   if (
     !(canvas instanceof HTMLCanvasElement) ||
     !(root instanceof HTMLElement) ||
@@ -82,7 +83,7 @@ export function mountShooter(canvas, root, onMenu, touchRoot) {
       boss: null,
       focus: { active: false, t: 0, chain: 0, target: null, dash: null, arm: 0, ready: false },
       hitstop(duration, scale) {
-        if (this.mode === 'pvp') return;
+        if (this.mode !== 'solo') return;
         this.hitstopT = Math.max(this.hitstopT, duration);
         this.hitstopScale = scale;
       },
@@ -108,19 +109,22 @@ export function mountShooter(canvas, root, onMenu, touchRoot) {
     const screens = createScreens(
       ctx,
       prefs,
-      { begin, menu, online: () => pvp.open(), settings: applySettings },
+      { begin, menu, online: () => pvp.open(), explore: options.onExplore, settings: applySettings },
       onScreen,
     );
-    const pvp = (ctx.pvp = new Multiplayer(ctx, {
+    const Session = options.explore ? Exploration : Multiplayer;
+    const pvp = (ctx.pvp = new Session(ctx, {
       setArena,
+      mapRoot,
       reset,
       show: onScreen,
       resume: () => begin(),
-      exit: menu,
+      exit: options.explore ? options.onHome : menu,
       settings: applySettings,
       prefs,
       pickups,
     }));
+    if (options.explore) app.append(pvp.overlay);
     player.onThrow = (data) => pvp.grenade(data);
     player.onFall = () => pvp.fall();
     let running = true,
@@ -396,7 +400,7 @@ export function mountShooter(canvas, root, onMenu, touchRoot) {
       hud.setSpread(weapon.spreadPx);
       hud.update(dt);
       hud.setFocusMeter(
-        playing && (weapon.kind === 'katana' || game.katanaStreak > 0 || game.focus.active),
+        playing && !pvp.enabled && (weapon.kind === 'katana' || game.katanaStreak > 0 || game.focus.active),
         game.focus.active ? 1 : clamp(game.katanaStreak / focus.chargeKills, 0, 1),
         game.focus.active,
       );
@@ -426,7 +430,8 @@ export function mountShooter(canvas, root, onMenu, touchRoot) {
     }
     applySettings();
     hud.setWeapon(player.weapon.name, player.weapon.hint);
-    screens.start();
+    if (options.explore) void pvp.open();
+    else screens.start();
     frame = requestAnimationFrame(tick);
     return {
       stop() {

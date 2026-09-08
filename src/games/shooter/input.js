@@ -30,6 +30,8 @@ const KEYMAP = {
   KeyP: 'pause',
   Enter: 'confirm',
   KeyG: 'grenade',
+  KeyB: 'interact',
+  KeyN: 'resetRun',
   KeyX: 'dash',
   AltLeft: 'dash',
   KeyM: 'music',

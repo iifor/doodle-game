@@ -23,18 +23,21 @@ const gamepad = [
   ['Create', '联机计分板'],
 ];
 
-export function Controls() {
+export function Controls({ exploration = false }) {
   return (
     <details>
       <summary>玩法与操作说明</summary>
-      <div className="touch-instructions">
-        <div className="colhead">手机触屏 · 横屏战斗</div>
-        <p>左侧摇杆移动，右侧滑动瞄准；按住射击按钮可同时拖动瞄准，持刀时为挥刀。</p>
-        <p>枪械点击瞄准切换开镜；武士刀按住格挡。跳跃支持二段跳和蹬墙跳，滑铲在空中变为冲刺。</p>
-        <p>钩索点按摆荡、长按拉近，搭配跳跃弹射。手雷按住蓄力、松手投掷；拔刀和冲刺斩有独立按钮。</p>
-        <p>疾跑点击开关，停止前进解除。底部四个武器槽可直接换枪；右上角打开菜单和计分板。</p>
-        <p>高级组合动作可用三指以上操作。联机菜单不会暂停对局，房主切后台过久会关闭房间。</p>
-      </div>
+      {!exploration && (
+        <div className="touch-instructions">
+          <div className="colhead">手机触屏 · 横屏战斗</div>
+          <p>左侧摇杆移动，右侧滑动瞄准；按住射击按钮可同时拖动瞄准，持刀时为挥刀。</p>
+          <p>枪械点击瞄准切换开镜；武士刀按住格挡。跳跃支持二段跳和蹬墙跳，滑铲在空中变为冲刺。</p>
+          <p>钩索点按摆荡、长按拉近，搭配跳跃弹射。手雷按住蓄力、松手投掷；拔刀和冲刺斩有独立按钮。</p>
+          <p>疾跑点击开关，停止前进解除。底部四个武器槽可直接换枪；右上角打开菜单和计分板。</p>
+          <p>高级组合动作可用三指以上操作。联机菜单不会暂停对局，房主切后台过久会关闭房间。</p>
+        </div>
+      )}
+      {exploration && <p>B 进入建筑／返回街道 · N 在仓库门外重置挑战（室内无人时）</p>}
       <div className="cols">
         {[
           ['键盘与鼠标', keyboard],
@@ -42,11 +45,17 @@ export function Controls() {
         ].map(([title, rows]) => (
           <div key={title}>
             <div className="colhead">{title}</div>
-            {rows.map(([key, description]) => (
-              <div key={key}>
-                <b>{key}</b> {description}
-              </div>
-            ))}
+            {rows
+              .filter(
+                ([key]) =>
+                  !exploration || !['Tab', 'Create', '同时按鼠标左右键 / X', 'L2 + R2'].includes(key),
+              )
+              .map(([key, description]) => (
+                <div key={key}>
+                  <b>{key}</b>{' '}
+                  {exploration && ['Esc', 'Options'].includes(key) ? '世界菜单（联机战斗继续）' : description}
+                </div>
+              ))}
           </div>
         ))}
       </div>

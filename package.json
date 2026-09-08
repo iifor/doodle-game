@@ -15,7 +15,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "npm run lint && npm run test && npm run format:check && npm run build",
-    "signal": "node scripts/signaling.js"
+    "signal": "node scripts/signaling.js",
+    "world": "node server/world-server.js"
   },
   "dependencies": {
     "lxgw-wenkai-screen-webfont": "1.7.0",
