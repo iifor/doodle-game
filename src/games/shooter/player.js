@@ -220,6 +220,18 @@ export class Player {
     for (const n of this.nades) disposeTree(n.mesh);
     this.nades.length = 0;
   }
+  cancelInput(action) {
+    if (action === undefined || action === 'grenade') {
+      this._nadeHeld = false;
+      this.nadeCharge = 0;
+      if (this._arc) this.updateNadeArc(-1);
+    }
+    if (action === undefined) {
+      this.sprintToggle = false;
+      this.jumpBuffer = 0;
+      this.sliding = false;
+    }
+  }
   get isBlocking() {
     return this.weapon.kind === 'katana' && this.weapon.blocking;
   }

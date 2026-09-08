@@ -4,7 +4,7 @@
 
 ## 运行
 
-需要 Node.js 20.15+、npm，以及支持 WebGL 2、浮点渲染目标、Web Audio 和 Pointer Lock 的桌面浏览器。
+需要 Node.js 20.15+、npm，以及支持 WebGL 2、浮点渲染目标和 Web Audio 的浏览器。桌面鼠标操作还需要 Pointer Lock；手机触屏操作不申请鼠标锁定。
 
 ```sh
 npm ci
@@ -29,7 +29,7 @@ npm run dev -- --port 5180
 - 7 种普通敌人、3 种轮换 Boss、波次、连击、补给与检查点。
 - React 开始、暂停、死亡菜单；设置、操作说明；独立的实时 HUD。
 
-原仓库的 Mexico 地图在源码中标记为未就绪。保留其独立构建模块，但第一版菜单及存档校验只开放 District。已接入私人/公开房间和最多 10 人 PVP 自由混战；其它玩法与移动端触屏操作尚未开放。联机运行方法见 [联机说明](docs/multiplayer.md)。
+原仓库的 Mexico 地图在源码中标记为未就绪。保留其独立构建模块，但第一版菜单及存档校验只开放 District。已接入私人/公开房间和最多 10 人 PVP 自由混战，以及手机横屏触屏操作；其它玩法尚未开放。联机运行方法见 [联机说明](docs/multiplayer.md)，手机操作与兼容验证见 [手机版说明](docs/mobile.md)。
 
 ## 工程结构
 

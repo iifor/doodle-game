@@ -1,6 +1,7 @@
 import 'lxgw-wenkai-screen-webfont/lxgwwenkaigbscreen.css';
 import '../games/shooter/shooter.css';
 import './shell.css';
+import '../games/shooter/ui/mobile.css';
 
 const status = document.getElementById('app-status');
 const listeners = new AbortController();

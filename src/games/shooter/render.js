@@ -298,7 +298,6 @@ export class InkRenderer {
     this._clear = new THREE.Color(1, 0, 0);
     this._ld = new THREE.Vector3();
     this.resize();
-    window.addEventListener('resize', () => this.resize(), { signal });
   }
   dispose() {
     this.rt.dispose();
@@ -306,8 +305,8 @@ export class InkRenderer {
     this.renderer.dispose();
   }
   resize() {
-    const w = Math.max(2, window.innerWidth),
-      h = Math.max(2, window.innerHeight);
+    const w = Math.max(2, this.renderer.domElement.clientWidth),
+      h = Math.max(2, this.renderer.domElement.clientHeight);
     this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.setSize(w, h, false);
     const rw = Math.floor(w * this.pixelRatio),
@@ -319,6 +318,11 @@ export class InkRenderer {
     u.uRes.value.set(rw, rh);
     u.uAspect.value = w / h;
     u.uLineSpacing.value = rh / 13.5;
+  }
+  setQuality(quality) {
+    if (!['smooth', 'standard'].includes(quality)) throw new Error(`未知画质：${quality}`);
+    this.pixelRatio = Math.min(window.devicePixelRatio, quality === 'smooth' ? 1 : 1.5);
+    this.resize();
   }
   render(time, fx = {}) {
     shared.uTime.value = time;

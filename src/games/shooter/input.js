@@ -1,5 +1,6 @@
-// Unified keyboard/mouse + gamepad (PS5 DualSense / standard mapping) input.
+// Keyboard/mouse, standard gamepad and independent touch pointers share game actions.
 import { clamp } from './util.js';
+import { TouchInput } from './touch-input.js';
 
 const KEYMAP = {
   KeyW: 'forward',
@@ -73,7 +74,12 @@ export class Input {
     this.mouseSens = 0.0022;
     this.padSensX = 3.4;
     this.padSensY = 2.6;
-    this.usingGamepad = false;
+    this.device = matchMedia('(pointer: coarse)').matches ? 'touch' : 'mouse';
+    this.touch = new TouchInput({
+      activate: () => this.useDevice('touch'),
+      cancel: (action) => this.onCancel?.(action),
+    });
+    this.touchPressed = new Set();
     this.gamepadIndex = -1;
     this.padHoldTime = 0;
     this.pointerLocked = false;
@@ -95,9 +101,9 @@ export class Input {
       !!target.closest('input, select, textarea, button, summary, [contenteditable]');
     listen(window, 'keydown', (e) => {
       if (e.repeat || isControl(e.target)) return;
+      this.useMouse();
       if (KEYMAP[e.code]) this.keyCodes.add(e.code);
       if (['Space', 'Tab', 'ArrowUp', 'ArrowDown'].includes(e.code)) e.preventDefault();
-      this.useMouse();
     });
     listen(window, 'keyup', (e) => this.keyCodes.delete(e.code));
     listen(window, 'blur', () => this.clear());
@@ -106,15 +112,15 @@ export class Input {
     });
     listen(document, 'mousemove', (e) => {
       if (!this.pointerLocked) return;
+      this.useMouse();
       this.mx += clamp(e.movementX, -400, 400);
       this.my += clamp(e.movementY, -400, 400);
-      this.useMouse();
     });
     listen(document, 'mousedown', (e) => {
       if (!this.pointerLocked) return;
+      this.useMouse();
       const action = MOUSEMAP[e.button];
       if (action) this.mouseBtns[action] = true;
-      this.useMouse();
       if ([1, 3, 4].includes(e.button)) e.preventDefault();
     });
     listen(document, 'mouseup', (e) => {
@@ -135,17 +141,39 @@ export class Input {
       this.clear();
       if (this.onLockChange) this.onLockChange(this.pointerLocked);
     });
+    listen(
+      document,
+      'pointerdown',
+      (e) => {
+        if (e.pointerType === 'touch' || e.pointerType === 'pen') this.useDevice('touch');
+        else if (e.pointerType === 'mouse' && !e.sourceCapabilities?.firesTouchEvents) this.useMouse();
+      },
+      { capture: true },
+    );
     listen(window, 'gamepadconnected', (e) => {
       this.gamepadIndex = e.gamepad.index;
     });
   }
   useMouse() {
-    if (this.usingGamepad && this.onDeviceChange) this.onDeviceChange(false);
-    this.usingGamepad = false;
+    this.useDevice('mouse');
+  }
+  get usingGamepad() {
+    return this.device === 'gamepad';
+  }
+  useDevice(device) {
+    if (!['mouse', 'gamepad', 'touch'].includes(device)) throw new Error(`未知输入设备：${device}`);
+    if (this.device !== device) {
+      this.clear();
+      this.device = device;
+      if (device !== 'mouse') this.exitLock();
+      this.onDeviceChange?.(device);
+    }
     this.anyInput = true;
     this.lastActive = performance.now();
   }
   clear() {
+    this.touch.clear();
+    this.touchPressed.clear();
     this.keyCodes.clear();
     this.keys = {};
     this.mouseBtns = {};
@@ -241,21 +269,30 @@ export class Input {
         }
       }
       if (padActive) {
-        if (!this.usingGamepad && this.onDeviceChange) this.onDeviceChange(true);
-        this.usingGamepad = true;
-        this.anyInput = true;
-        this.lastActive = performance.now();
+        this.useDevice('gamepad');
       }
       this._pad = pad;
     } else {
       this._pad = null;
       if (this.usingGamepad) {
-        this.usingGamepad = false;
-        if (this.onDeviceChange) this.onDeviceChange(false);
+        this.useDevice(matchMedia('(pointer: coarse)').matches ? 'touch' : 'mouse');
       }
     }
     this.padPrev = this.padState;
     this.padState = padS;
+
+    this.touchPressed.clear();
+    if (this.device === 'touch') {
+      const touch = this.touch.sample();
+      for (const key of Object.keys(s)) delete s[key];
+      Object.assign(s, touch.state);
+      this.touchPressed = touch.pressed;
+      mx = touch.move.x;
+      my = touch.move.y;
+      lx = touch.look.x;
+      ly = touch.look.y;
+    }
+    this.state = s;
 
     const ml = Math.hypot(mx, my);
     if (ml > 1) {
@@ -275,7 +312,11 @@ export class Input {
     return (performance.now() - this.lastActive) / 1000;
   }
   pressed(a) {
-    return (!!this.state[a] && !this.prev[a]) || (!!this.padState[a] && !this.padPrev[a]);
+    return (
+      this.touchPressed.has(a) ||
+      (!!this.state[a] && !this.prev[a]) ||
+      (!!this.padState[a] && !this.padPrev[a])
+    );
   }
   released(a) {
     return !this.state[a] && !!this.prev[a];

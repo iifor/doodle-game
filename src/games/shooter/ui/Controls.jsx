@@ -27,6 +27,14 @@ export function Controls() {
   return (
     <details>
       <summary>玩法与操作说明</summary>
+      <div className="touch-instructions">
+        <div className="colhead">手机触屏 · 横屏战斗</div>
+        <p>左侧摇杆移动，右侧滑动瞄准；按住射击按钮可同时拖动瞄准，持刀时为挥刀。</p>
+        <p>枪械点击瞄准切换开镜；武士刀按住格挡。跳跃支持二段跳和蹬墙跳，滑铲在空中变为冲刺。</p>
+        <p>钩索点按摆荡、长按拉近，搭配跳跃弹射。手雷按住蓄力、松手投掷；拔刀和冲刺斩有独立按钮。</p>
+        <p>疾跑点击开关，停止前进解除。底部四个武器槽可直接换枪；右上角打开菜单和计分板。</p>
+        <p>高级组合动作可用三指以上操作。联机菜单不会暂停对局，房主切后台过久会关闭房间。</p>
+      </div>
       <div className="cols">
         {[
           ['键盘与鼠标', keyboard],

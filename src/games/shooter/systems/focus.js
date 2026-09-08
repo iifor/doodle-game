@@ -188,7 +188,10 @@ export function createFocus(ctx) {
     }
     _fv.copy(target.center).project(renderer.camera);
     if (_fv.z < 1)
-      hud.setFocusMark((_fv.x * 0.5 + 0.5) * window.innerWidth, (-_fv.y * 0.5 + 0.5) * window.innerHeight);
+      hud.setFocusMark(
+        (_fv.x * 0.5 + 0.5) * hud.root.clientWidth,
+        (-_fv.y * 0.5 + 0.5) * hud.root.clientHeight,
+      );
     else hud.setFocusMark(null);
     if (combo && f.ready && f.arm <= 0) {
       input.consume('fire');

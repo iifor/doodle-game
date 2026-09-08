@@ -139,14 +139,16 @@ export class HUD {
     this.el.nades.innerHTML = h;
   }
   // control labels follow whatever you touched last
-  setDevice(pad) {
-    if (pad === this._pad) return;
-    this._pad = pad;
-    this.root.classList.toggle('pad', pad);
-    if (this.onDevice) this.onDevice(pad);
+  setDevice(device) {
+    if (device === this.device) return;
+    this.device = device;
+    this._pad = device === 'gamepad';
+    this.root.classList.toggle('pad', this._pad);
+    this.root.classList.toggle('touch', device === 'touch');
+    if (this.onDevice) this.onDevice(device);
   }
   key(action) {
-    return (this._pad ? PAD_KEYS : KB_KEYS)[action] || action;
+    return (this.device === 'touch' ? TOUCH_KEYS : this._pad ? PAD_KEYS : KB_KEYS)[action] || action;
   }
   setScope(on) {
     if (on === this._scope) return;
@@ -377,4 +379,22 @@ export const PAD_KEYS = {
   pause: 'Options',
   confirm: '✕',
   score: 'Create',
+};
+export const TOUCH_KEYS = {
+  fire: '射击 / 挥刀',
+  aim: '瞄准',
+  block: '格挡',
+  jump: '跳跃',
+  sprint: '疾跑',
+  slide: '滑铲',
+  dash: '滑铲',
+  grapple: '钩索',
+  melee: '拔刀',
+  reload: '装弹',
+  grenade: '手雷',
+  focus: '冲刺斩',
+  next: '武器槽',
+  pause: '菜单',
+  confirm: '开始游戏',
+  score: '计分板',
 };

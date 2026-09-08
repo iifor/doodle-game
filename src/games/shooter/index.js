@@ -19,11 +19,16 @@ import { createPreferences } from './preferences.js';
 import { disposeTree } from '../../shared/resources.js';
 
 // One mounted game owns its listeners, animation frame, scene and audio lifetime.
-export function mountShooter(canvas, root, onScreen) {
-  if (!(canvas instanceof HTMLCanvasElement) || !(root instanceof HTMLElement)) {
-    throw new Error('Shooter requires a canvas and HUD root');
+export function mountShooter(canvas, root, onMenu, touchRoot) {
+  if (
+    !(canvas instanceof HTMLCanvasElement) ||
+    !(root instanceof HTMLElement) ||
+    !(touchRoot instanceof HTMLElement)
+  ) {
+    throw new Error('Shooter requires canvas, HUD and touch roots');
   }
-  const prefs = createPreferences(localStorage);
+  const app = canvas.parentElement;
+  const prefs = createPreferences(localStorage, { touch: matchMedia('(pointer: coarse)').matches });
   const lifetime = new AbortController();
   const signal = lifetime.signal;
   let renderer;
@@ -36,6 +41,12 @@ export function mountShooter(canvas, root, onScreen) {
     let level = buildLevel(mapRoot, world, prefs.get('map'));
     const nav = new NavGrid(world, level.bounds, 1).build();
     const input = new Input(canvas, signal);
+    input.touch.mount(touchRoot, signal);
+    const onScreen = (view) => {
+      app.dataset.playing = String(view === null);
+      if (view) input.touch.setEnabled(false);
+      onMenu(view);
+    };
     const hud = new HUD(root);
     const effects = new Effects(renderer.scene, world);
     const ctx = {
@@ -82,6 +93,7 @@ export function mountShooter(canvas, root, onScreen) {
         hud.setScore(this.score, this.combo);
       },
       onPlayerDeath() {
+        input.clear();
         focus.end();
         this.state = this.mode === 'pvp' && this.menu ? 'pause' : 'dying';
         this.deathT = 0;
@@ -89,6 +101,7 @@ export function mountShooter(canvas, root, onScreen) {
     });
     const enemies = (ctx.enemies = new EnemyManager(ctx));
     const player = (ctx.player = new Player(ctx));
+    input.onCancel = (action) => player.cancelInput(action);
     const focus = createFocus(ctx);
     const pickups = createPickups(ctx);
     const waves = createWaves(ctx, pickups, focus, prefs);
@@ -136,7 +149,9 @@ export function mountShooter(canvas, root, onScreen) {
       input.mouseSens = 0.0022 * sensitivity;
       input.padSensX = 3.4 * sensitivity;
       input.padSensY = 2.6 * sensitivity;
+      input.touch.sensitivity = (0.004 * prefs.get('touchSensitivity')) / 100;
       input.invertY = prefs.get('invert');
+      renderer.setQuality(prefs.get('quality'));
       if (audio.ctx) audio.musicOn(prefs.get('music'));
     }
     function reset() {
@@ -170,6 +185,12 @@ export function mountShooter(canvas, root, onScreen) {
       if (starting || !running) return;
       starting = true;
       try {
+        if (input.device === 'touch' && canvas.clientWidth <= canvas.clientHeight) {
+          const message = '请将手机横屏后再进入战场。';
+          if (pvp.enabled) pvp.report(message);
+          else screens.error(message);
+          return;
+        }
         if (!navigator.userActivation.hasBeenActive) {
           const message = '请先点击开始按钮，以启用浏览器音频。';
           if (pvp.enabled) pvp.report(message);
@@ -177,10 +198,14 @@ export function mountShooter(canvas, root, onScreen) {
           return;
         }
         audio.init();
-        const locked = input.usingGamepad ? true : await input.requestLock();
+        const locked = input.device !== 'mouse' || (await input.requestLock());
         if (!locked || !running) return;
         await audio.resume();
         if (!running) return;
+        if (document.hidden || (input.device === 'touch' && canvas.clientWidth <= canvas.clientHeight)) {
+          pause(document.hidden ? '请返回游戏页面后点击继续。' : '请横屏游玩，旋转后点击继续。');
+          return;
+        }
         if (pvp.enabled) pvp.ready();
         else if (wave !== undefined) {
           reset();
@@ -228,16 +253,40 @@ export function mountShooter(canvas, root, onScreen) {
       screens.start();
     }
     input.onLockChange = (locked) => {
-      if (!locked && !input.usingGamepad) pause();
+      if (!locked && input.device === 'mouse') pause();
     };
     input.onLockError = (error) => {
       console.error('[Pointer lock]', error);
       pause(`鼠标捕获失败：${error.message}。点击“开始游戏”或“继续游戏”重试。`);
     };
-    input.onDeviceChange = (pad) => {
-      hud.setDevice(pad);
-      if (!pad && !input.pointerLocked && game.state === 'play') pause('请点击“继续游戏”以捕获鼠标。');
+    input.onDeviceChange = (device) => {
+      app.dataset.input = device;
+      app.dataset.mobile = String(device === 'touch' || matchMedia('(pointer: coarse)').matches);
+      hud.setDevice(device);
+      if (device === 'mouse' && !input.pointerLocked && game.state === 'play')
+        pause('请点击“继续游戏”以捕获鼠标。');
+      if (device === 'touch' && canvas.clientWidth <= canvas.clientHeight) pause('请横屏游玩。');
     };
+    input.onDeviceChange(input.device);
+    function resizeViewport() {
+      const viewport = window.visualViewport;
+      app.style.width = `${viewport ? viewport.width : window.innerWidth}px`;
+      app.style.height = `${viewport ? viewport.height : window.innerHeight}px`;
+      app.style.left = `${viewport ? viewport.offsetLeft : 0}px`;
+      app.style.top = `${viewport ? viewport.offsetTop : 0}px`;
+      renderer.resize();
+      const portrait = canvas.clientWidth <= canvas.clientHeight;
+      app.dataset.portrait = String(portrait);
+      if (input.device === 'touch') {
+        input.clear();
+        if (portrait && (game.state === 'play' || (pvp.inMatch && game.state === 'dying')))
+          pause('请横屏游玩，旋转后点击继续。');
+      }
+    }
+    window.addEventListener('resize', resizeViewport, { signal });
+    window.visualViewport?.addEventListener('resize', resizeViewport, { signal });
+    window.visualViewport?.addEventListener('scroll', resizeViewport, { signal });
+    resizeViewport();
     window.addEventListener('blur', () => pause(), { signal });
     document.addEventListener(
       'visibilitychange',
@@ -264,6 +313,12 @@ export function mountShooter(canvas, root, onScreen) {
     function step(now) {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
+      input.touch.setWeapon(player.weapon.kind, player.weaponIndex);
+      input.touch.setEnabled(
+        input.device === 'touch' &&
+          canvas.clientWidth > canvas.clientHeight &&
+          (game.state === 'play' || (pvp.inMatch && game.state === 'dying')),
+      );
       input.update(dt);
       if (input.pressed('pause') && (game.state === 'play' || (pvp.inMatch && game.state === 'dying'))) {
         pause();

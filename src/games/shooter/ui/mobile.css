@@ -1,0 +1,358 @@
+#app {
+  position: fixed;
+  inset: 0 auto auto 0;
+  width: 100vw;
+  height: 100dvh;
+  overflow: hidden;
+}
+#app > canvas#c,
+#app > #hud,
+#app > .screen {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.touch-controls,
+.rotate-notice {
+  display: none;
+}
+#app[data-input='touch'][data-playing='true'][data-portrait='false'] .touch-controls {
+  display: block;
+}
+.touch-controls {
+  position: absolute;
+  inset: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+  z-index: 8;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.touch-controls [data-touch] {
+  pointer-events: auto;
+  touch-action: none;
+}
+.touch-controls button {
+  box-sizing: border-box;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 4px;
+  border: 2px solid var(--ink);
+  border-radius: 13px 10px 14px 11px;
+  background: #faf8eee8;
+  color: var(--ink);
+  font: 600 12px/1.2 var(--font-ui);
+}
+.touch-controls button.active {
+  color: var(--paper);
+  background: var(--ink);
+}
+.touch-look {
+  position: absolute;
+  left: 48%;
+  right: 0;
+  top: 0;
+  bottom: 0;
+}
+.touch-tools,
+.touch-system,
+.touch-weapons,
+.touch-actions,
+.touch-sprint {
+  position: absolute;
+  display: flex;
+  gap: 6px;
+}
+.touch-tools {
+  top: 96px;
+  left: 12px;
+}
+.touch-system {
+  top: 8px;
+  right: 12px;
+}
+.touch-system button {
+  min-width: 54px;
+}
+.touch-stick {
+  position: absolute;
+  left: 24px;
+  bottom: 20px;
+  width: 100px;
+  height: 100px;
+  border: 2px solid #1a30c080;
+  border-radius: 50%;
+  background: #faf8ee80;
+}
+.touch-stick i {
+  position: absolute;
+  top: 28px;
+  left: 28px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #1a30c0b0;
+  transform: translate(var(--stick-x, 0px), var(--stick-y, 0px));
+  pointer-events: none;
+}
+.touch-stick span {
+  position: absolute;
+  bottom: 6px;
+  width: 100%;
+  text-align: center;
+  font-size: 12px;
+  color: var(--ink);
+  pointer-events: none;
+}
+.touch-sprint {
+  bottom: 134px;
+  left: 52px;
+}
+.touch-weapons {
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  gap: 4px;
+}
+.touch-weapons button {
+  width: 44px;
+  padding: 2px;
+  font-size: 11px;
+}
+.touch-actions {
+  right: 12px;
+  bottom: 16px;
+  display: grid;
+  grid-template-columns: 48px 64px 48px;
+  align-items: center;
+}
+.touch-actions button {
+  width: 48px;
+  height: 48px;
+}
+.touch-actions [data-touch='fire'] {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: #1a30c0db;
+  color: white;
+  font-size: 16px;
+}
+.touch-actions [data-touch='grenade'] {
+  justify-self: center;
+}
+#app[data-input='touch'][data-portrait='true'] .rotate-notice {
+  display: block;
+  position: absolute;
+  bottom: max(8px, env(safe-area-inset-bottom));
+  left: 8px;
+  right: 8px;
+  z-index: 12;
+  padding: 10px;
+  text-align: center;
+  color: var(--ink);
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  font-size: 14px;
+  pointer-events: none;
+}
+.touch-instructions {
+  display: none;
+}
+#app[data-mobile='true'] {
+  --safe-top: max(8px, env(safe-area-inset-top));
+  --safe-left: max(12px, env(safe-area-inset-left));
+  --safe-right: max(12px, env(safe-area-inset-right));
+}
+#app[data-mobile='true'] .screen {
+  padding: var(--safe-top) var(--safe-right) max(12px, env(safe-area-inset-bottom)) var(--safe-left);
+}
+#app[data-mobile='true'][data-portrait='true'] .screen {
+  padding-bottom: 64px;
+}
+#app[data-mobile='true'] .panel {
+  max-height: 100%;
+  width: min(740px, 100%);
+  box-sizing: border-box;
+  padding: 18px;
+  transform: none;
+}
+#app[data-mobile='true'] .panel h1 {
+  font-size: 36px;
+}
+#app[data-mobile='true'] .panel h2 {
+  font-size: 20px;
+}
+#app[data-mobile='true'] .panel .mainbtns button.start {
+  font-size: 32px;
+  min-width: 0;
+}
+#app[data-mobile='true'] .panel .cols {
+  flex-direction: column;
+  font-size: 15px;
+  gap: 16px;
+}
+#app[data-mobile='true'] .panel summary {
+  font-size: 18px;
+  min-height: 44px;
+  line-height: 44px;
+}
+#app[data-mobile='true'] .panel button {
+  min-height: 44px;
+}
+#app[data-mobile='true'] .online-field {
+  font-size: 18px;
+  margin: 12px 0;
+}
+#app[data-mobile='true'] .online-field input {
+  min-height: 44px;
+  font-size: 18px;
+  min-width: 0;
+}
+#app[data-mobile='true'] .online-panel p,
+#app[data-mobile='true'] .online-scores {
+  font-size: 16px;
+}
+#app[data-mobile='true'] .online-panel button {
+  font-size: 16px;
+}
+#app[data-mobile='true'] .settings {
+  font-size: 16px;
+}
+#app[data-mobile='true'] .settings label {
+  min-height: 44px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+#app[data-mobile='true'] .settings input[type='range'] {
+  max-width: 36%;
+}
+#app[data-mobile='true'] .settings input[type='checkbox'] {
+  width: 22px;
+  height: 22px;
+}
+.settings select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--paper);
+  min-height: 44px;
+  border: 2px solid var(--ink);
+  border-radius: 6px;
+}
+#app[data-mobile='true'] .touch-instructions {
+  display: block;
+}
+#app[data-mobile='true'] #hud .hud-tl {
+  top: var(--safe-top);
+  left: var(--safe-left);
+  font-size: 16px;
+  transform: none;
+}
+#app[data-mobile='true'] #hud .hud-tr {
+  top: var(--safe-top);
+  right: calc(var(--safe-right) + 130px);
+  font-size: 15px;
+  max-width: 190px;
+  transform: none;
+}
+#app[data-mobile='true'] #hud .hud-bl {
+  top: calc(var(--safe-top) + 26px);
+  left: var(--safe-left);
+  bottom: auto;
+}
+#app[data-mobile='true'] #hud .health {
+  font-size: 14px;
+  gap: 6px;
+  margin: 0;
+}
+#app[data-mobile='true'] #hud .health .bar {
+  width: 90px;
+  height: 10px;
+}
+#app[data-mobile='true'] #hud .ammo b {
+  font-size: 26px;
+}
+#app[data-mobile='true'] #hud .ammo span {
+  font-size: 16px;
+}
+#app[data-mobile='true'] #hud .hud-br {
+  top: calc(var(--safe-top) + 60px);
+  right: var(--safe-right);
+  bottom: auto;
+}
+#app[data-mobile='true'] #hud .weapon {
+  font-size: 22px;
+}
+#app[data-mobile='true'] #hud .hint,
+#app[data-mobile='true'] #hud .slots,
+#app[data-mobile='true'] #hud .tally,
+#app[data-mobile='true'] #hud .pvpscore {
+  display: none;
+}
+#app[data-mobile='true'] #hud .combo,
+#app[data-mobile='true'] #hud .timer,
+#app[data-mobile='true'] #hud .modifier {
+  font-size: 14px;
+}
+#app[data-mobile='true'] #hud .killfeed {
+  top: 30%;
+  right: 28%;
+  max-width: 40%;
+  font-size: 14px;
+}
+#app[data-mobile='true'] #hud .message {
+  top: 28%;
+}
+#app[data-mobile='true'] #hud .msg-main {
+  font-size: 34px;
+}
+#app[data-mobile='true'] #hud .msg-sub {
+  font-size: 16px;
+}
+#app[data-mobile='true'] #hud .tip {
+  font-size: 13px;
+  bottom: 76px;
+  max-width: 42%;
+}
+#app[data-mobile='true'] #hud .bossbar {
+  top: 65px;
+  width: 36%;
+}
+#app[data-mobile='true'] #hud .bossname {
+  font-size: 14px;
+}
+#app[data-mobile='true'] #hud .focus-meter {
+  left: 28%;
+  bottom: 70px;
+  transform: scale(0.75);
+  transform-origin: bottom left;
+}
+#app[data-mobile='true'] #hud .board {
+  min-width: 0;
+  width: min(360px, 62%);
+  top: 54px;
+  max-height: calc(100% - 128px);
+  overflow-y: auto;
+  font-size: 14px;
+  padding: 8px;
+  pointer-events: auto;
+  z-index: 9;
+}
+#app[data-mobile='true'] #hud:has(.board:not([hidden])) {
+  z-index: 9;
+}
+#app[data-mobile='true'] #hud .board h3 {
+  font-size: 18px;
+}
+#app[data-mobile='true'] #hud .board div {
+  gap: 8px;
+}
+#app[data-mobile='true'] #hud .board .foot {
+  font-size: 12px;
+}
