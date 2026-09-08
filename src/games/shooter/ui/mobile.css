@@ -56,18 +56,26 @@
   top: 0;
   bottom: 0;
 }
-.touch-tools,
 .touch-system,
 .touch-weapons,
-.touch-actions,
-.touch-sprint {
+.touch-actions {
   position: absolute;
   display: flex;
   gap: 6px;
 }
-.touch-tools {
-  top: 96px;
+.touch-movement {
+  position: absolute;
   left: 12px;
+  bottom: 20px;
+  display: grid;
+  grid-template-columns: 116px 48px;
+  gap: 12px;
+  align-items: center;
+}
+.touch-tools {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
 }
 .touch-system {
   top: 8px;
@@ -77,9 +85,8 @@
   min-width: 54px;
 }
 .touch-stick {
-  position: absolute;
-  left: 24px;
-  bottom: 20px;
+  position: relative;
+  justify-self: end;
   width: 100px;
   height: 100px;
   border: 2px solid #1a30c080;
@@ -107,8 +114,7 @@
   pointer-events: none;
 }
 .touch-sprint {
-  bottom: 134px;
-  left: 52px;
+  justify-self: center;
 }
 .touch-weapons {
   bottom: 12px;
@@ -317,8 +323,9 @@
 }
 #app[data-mobile='true'] #hud .tip {
   font-size: 13px;
-  bottom: 76px;
-  max-width: 42%;
+  bottom: calc(76px + env(safe-area-inset-bottom));
+  left: calc(196px + env(safe-area-inset-left));
+  right: calc(196px + env(safe-area-inset-right));
 }
 #app[data-mobile='true'] #hud .bossbar {
   top: 65px;
