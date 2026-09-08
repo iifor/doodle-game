@@ -84,3 +84,5 @@
 未用桌面模拟帧率或触摸结果代替真机结论。中文操作说明见 [手机网页](mobile.md)。
 
 - [x] 2026-09-08 GitHub Actions 自动部署验证（Deploy workflow e007f3f+）
+
+- [x] 2026-09-08 GitHub Actions 自动部署端到端复验
