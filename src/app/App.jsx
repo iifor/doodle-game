@@ -27,7 +27,7 @@ function App({ sessionRef, onReady }) {
   }, [sessionRef, onReady, explore]);
   return (
     <>
-      <canvas ref={canvas} id="c" aria-label="涂鸦街区游戏画面" tabIndex={0} />
+      <canvas ref={canvas} id="c" aria-label="涂鸦世界游戏画面" tabIndex={0} />
       <div ref={hud} id="hud" />
       <TouchControls rootRef={touch} />
       <div className="rotate-notice" role="status">

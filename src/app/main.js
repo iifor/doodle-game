@@ -11,7 +11,7 @@ let failed = false;
 function fatal(reason) {
   if (failed) return;
   failed = true;
-  console.error('[Doodle Game] Fatal error', reason);
+  console.error('[涂鸦世界] Fatal error', reason);
   status.replaceChildren();
   status.hidden = false;
   status.setAttribute('role', 'alert');

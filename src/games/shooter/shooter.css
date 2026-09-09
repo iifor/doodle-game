@@ -1100,6 +1100,14 @@ canvas#c {
 .mainbtns button.start + button {
   transform: rotate(0.7deg);
 }
+.mainbtns button.solo {
+  font-size: 18px;
+  padding: 5px 18px;
+  border-width: 2px;
+  transform: rotate(0.4deg);
+  background: transparent;
+  color: var(--ink);
+}
 .online {
   display: flex;
   flex-direction: column;

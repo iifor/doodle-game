@@ -31,9 +31,9 @@ export function ShooterMenu({ view }) {
   return (
     <div className="screen show shooter-menu" role="dialog" aria-modal="true" aria-labelledby="menu-title">
       <div className="panel">
-        <h1 id="menu-title">{kind === 'start' ? '涂鸦街区' : kind === 'pause' ? '已暂停' : '你被擦除了'}</h1>
+        <h1 id="menu-title">{kind === 'start' ? '涂鸦世界' : kind === 'pause' ? '已暂停' : '你被擦除了'}</h1>
         {kind === 'start' ? (
-          <h2>纸上涂鸦 · 生存射击</h2>
+          <h2>纸上涂鸦 · 开放世界</h2>
         ) : (
           <h2>
             第 {wave} 波 · 得分 {score}
@@ -41,24 +41,28 @@ export function ShooterMenu({ view }) {
           </h2>
         )}
         <div className="mainbtns">
-          <button
-            className="start"
-            ref={firstButton}
-            onClick={() => actions.begin(kind === 'pause' ? undefined : 1)}
-          >
-            {kind === 'start' ? (
-              <>
-                开始游戏<i>单人生存 · 迎战一波波敌人</i>
-              </>
-            ) : kind === 'pause' ? (
-              '继续游戏'
-            ) : (
-              '再画一局'
-            )}
-          </button>
-          {kind === 'start' && <button onClick={actions.online}>联机对战</button>}
-          {kind === 'start' && <button onClick={actions.explore}>开放世界</button>}
-          {kind !== 'start' && <button onClick={actions.menu}>返回主菜单</button>}
+          {kind === 'start' ? (
+            <>
+              <button className="start" ref={firstButton} onClick={actions.explore}>
+                开始开放世界<i>自由探索 · 合作战斗</i>
+              </button>
+              <button onClick={actions.online}>联机对战</button>
+              <button className="solo" onClick={() => actions.begin(1)}>
+                单人模式
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className="start"
+                ref={firstButton}
+                onClick={() => actions.begin(kind === 'pause' ? undefined : 1)}
+              >
+                {kind === 'pause' ? '继续游戏' : '再画一局'}
+              </button>
+              <button onClick={actions.menu}>返回主菜单</button>
+            </>
+          )}
         </div>
         {error && <p role="alert">{error}</p>}
         {kind !== 'dead' && (

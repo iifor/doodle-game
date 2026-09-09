@@ -1,6 +1,6 @@
-# Doodle Game
+# 涂鸦世界
 
-基于本地 `doodleshooter` 复刻的模块化游戏项目。当前提供 **Doodle District 单人生存射击、联机自由混战与 PC 开放世界**，React 管理菜单与设置，Three.js 管理游戏场景与实时循环。
+基于本地 `doodleshooter` 复刻的模块化游戏项目。当前主打 **PC 开放世界**，并保留联机自由混战与单人生存射击。React 管理菜单与设置，Three.js 管理游戏场景与实时循环。
 
 ## 运行
 
