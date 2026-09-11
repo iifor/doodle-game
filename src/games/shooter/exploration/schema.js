@@ -228,10 +228,17 @@ export function connectingRoads(seed, x, z) {
         ],
   );
 }
+// The prompt hands the model a worked example; a copied name means it skipped the brief.
+export const EXAMPLE_NAME = '示例街区（请自拟）';
+const COPIED_NAMES = [EXAMPLE_NAME, '街区名称', '区域名', '区域名称', '街区名', '区域'];
 // Generation has a content minimum; archived layouts keep their original validation contract.
 export function validateGeneratedLayout(raw, seed, x, z) {
   const layout = validateLayout(raw, seed, x, z);
   requireWorld(layout.buildings.length >= 4, '新区域至少需要四栋建筑，不能生成空地图');
+  requireWorld(
+    !COPIED_NAMES.includes(layout.name),
+    `区域名称"${layout.name}"照抄了示例占位符，请自拟一个有特色的中文街区名`,
+  );
   return layout;
 }
 export function campLayout(seed) {

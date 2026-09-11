@@ -13,9 +13,11 @@ import {
   localPosition,
   checksum,
   validateGeneratedLayout,
+  EXAMPLE_NAME,
 } from '../src/games/shooter/exploration/schema.js';
 import { Chunks, buildChunk } from '../src/games/shooter/exploration/chunks.js';
-import { roadsidePlan } from '../src/games/shooter/exploration/roadside.js';
+import { roadsidePlan, buildRoadside, SIGN_TEXT } from '../src/games/shooter/exploration/roadside.js';
+import { createBuilder } from '../src/games/shooter/levels/builder.js';
 import { enterableBuildings } from '../src/games/shooter/exploration/interiors.js';
 import { NavGrid } from '../src/games/shooter/nav.js';
 import { World, makeBody } from '../src/games/shooter/physics.js';
@@ -71,11 +73,21 @@ test('roadside scenery is stable and keeps actual paths to exits, encounters and
       block = { x: 1, z: 0, layout: layout(seed, 1, 0) },
       original = JSON.stringify(block);
     const plan = roadsidePlan(block);
-    assert.ok(plan.length >= 30 && plan.length <= 64);
+    assert.ok(plan.length >= 18 && plan.length <= 44, `prop count ${plan.length}`);
     assert.deepEqual(
       new Set(plan.map((a) => a.kind)),
       new Set(['puddle', 'barrier', 'sign', 'mound', 'rock', 'grass']),
     );
+    // Soil and water must stay sparse enough to walk a street without tripping.
+    for (const [kind, limit] of [
+      ['mound', 4],
+      ['puddle', 6],
+      ['sign', 5],
+    ])
+      assert.ok(plan.filter((a) => a.kind === kind).length <= limit, `${kind} too dense`);
+    // A board parallel to its own street would be read edge-on.
+    for (const a of plan.filter((a) => a.kind === 'sign'))
+      assert.equal(a.horizontal, a.w > a.d, `sign ${a.x},${a.z} faces along its road`);
     assert.deepEqual(roadsidePlan(JSON.parse(original)), plan);
     assert.equal(JSON.stringify(block), original);
     const built = buildChunk(block);
@@ -99,6 +111,31 @@ test('roadside scenery is stable and keeps actual paths to exits, encounters and
   }
   assert.deepEqual(roadsidePlan({ layout: { interior: true } }), []);
   assert.deepEqual(roadsidePlan({ layout: { schemaVersion: 2 } }), []);
+});
+
+test('road sign boards turn to face across their own street', () => {
+  for (let i = 0; i < 8; i++) {
+    const seed = `sign-${i}`,
+      block = { x: 1, z: 0, layout: layout(seed, 1, 0) };
+    const root = new THREE.Group(),
+      world = new World();
+    const b = createBuilder(root, world),
+      boards = [];
+    buildRoadside(b, block, (_root, text, x, y, z, width, ink, north, yaw) =>
+      boards.push({ text, x, z, yaw: yaw ?? 0, north: !!north }),
+    );
+    const signs = b.L.roadside.filter((a) => a.kind === 'sign');
+    assert.equal(boards.length, signs.length * 2, 'every board is legible from both sides');
+    for (const a of signs) {
+      const faces = boards.filter((s) => Math.abs(s.x - a.x) < 0.2 && Math.abs(s.z - a.z) < 0.2);
+      assert.equal(faces.length, 2, `sign at ${a.x},${a.z}`);
+      assert.ok(SIGN_TEXT.includes(faces[0].text));
+      for (const face of faces) assert.equal(face.yaw, a.horizontal ? 0 : Math.PI / 2);
+      // The two faces sit on opposite sides of the board and point away from each other.
+      assert.notEqual(faces[0].north, faces[1].north);
+    }
+    disposeTree(root);
+  }
 });
 
 test('mounds can be climbed, barriers stop walking and bullets, and shallow puddles stay walkable', () => {
@@ -406,6 +443,11 @@ test('AI world creation requires populated land and never saves an empty fallbac
   assert.ok(camp.layout.buildings.length >= 4);
   assert.equal(camp.layout.outpost, null);
   assert.throws(() => validateGeneratedLayout(campLayout('s'), 's', 0, 0), /四栋建筑/);
+  // A name copied from the prompt's worked example means the model ignored the brief.
+  for (const name of [EXAMPLE_NAME, '街区名称', '区域名']) {
+    assert.throws(() => validateGeneratedLayout({ ...layout('s', 1, 0), name }, 's', 1, 0), /照抄/);
+    assert.equal(validateLayout({ ...layout('s', 1, 0), name }, 's', 1, 0).name, name);
+  }
   const before = await store.list();
   const unavailable = new WorldStore(directory, () => {
     throw new Error('未配置 DEEPSEEK_API_KEY');

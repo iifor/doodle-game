@@ -38,6 +38,7 @@ import {
   requireWorld,
   exits,
   connectingRoads,
+  EXAMPLE_NAME,
 } from '../src/games/shooter/exploration/schema.js';
 
 export async function atomicWrite(file, data) {
@@ -577,7 +578,7 @@ export function deepSeekGenerator({
   return async ({ seed, x, z, neighbors, design, validate }) => {
     requireWorld(key, '未配置 DEEPSEEK_API_KEY；已保存区域仍可游玩');
     const reference = {
-      name: '街区名称',
+      name: EXAMPLE_NAME,
       roads: connectingRoads(seed, x, z),
       buildings: [{ x: 20, z: 20, w: 12, d: 12, h: 8 }],
       cover: [{ x: 108, z: 108, w: 2, d: 2, h: 1 }],
@@ -619,7 +620,7 @@ export function deepSeekGenerator({
               {
                 role: 'system',
                 content:
-                  '你是涂鸦城镇关卡设计师。只输出 JSON。区域128米见方，平地y=0。结构：{"name":"区域名","roads":[[x1,z1,x2,z2]],"buildings":[{"x":20,"z":20,"w":12,"d":12,"h":8}],"cover":[{"x":40,"z":20,"w":2,"d":2,"h":1}],"landmark":[64,64],"supply":[68,68],"outpost":{"center":[64,64],"spawns":[[52,52],[76,52],[52,76],[76,76]]}}。道路宽8米，轴对齐，必须连接给定四个出口且互通；可以用折线路段连接。道路1–24段，建筑不超过32个高度3–18米，掩体不超过32个高度0.7–2米。建筑和掩体的x,z是矩形中心坐标，不是左下角；w,d是完整宽深，h为高度。必须满足x-w/2>=8、x+w/2<=120、z-d/2>=8、z+d/2<=120。建议从suggestedCenters选择互不重复的空地中心，宽深选6–16米，必须放4–8栋建筑和2–4个掩体，不得返回空建筑数组。营地区块[0,0]的outpost必须为null，其他区块必须包含四个敌人出生点。提供的reference是已可行的道路和出生点布局，建议保留其roads并从空地选择建筑，改变建筑数量、长宽、高度和掩体位置形成不同街区；不要把建筑移到道路上。组件相互至少间隔1米，建筑外缘与道路中线至少相隔4米，任何地标、补给、出生点周围留出1.2米空间。所有点坐标在[4,124]内。优先少量建筑形成不同广场、街巷与屋顶轮廓。地标为地面标志，不能被建筑遮挡。四个敌人出生点相距至少2.5米。若提供correction，则根据其中error修改previousOutput的错误，仍输出完整JSON，不要重复无效布局。',
+                  '你是涂鸦城镇关卡设计师。只输出 JSON。区域128米见方，平地y=0。结构：{"name":"区域名","roads":[[x1,z1,x2,z2]],"buildings":[{"x":20,"z":20,"w":12,"d":12,"h":8}],"cover":[{"x":40,"z":20,"w":2,"d":2,"h":1}],"landmark":[64,64],"supply":[68,68],"outpost":{"center":[64,64],"spawns":[[52,52],[76,52],[52,76],[76,76]]}}。道路宽8米，轴对齐，必须连接给定四个出口且互通；可以用折线路段连接。道路1–24段，建筑不超过32个高度3–18米，掩体不超过32个高度0.7–2米。建筑和掩体的x,z是矩形中心坐标，不是左下角；w,d是完整宽深，h为高度。必须满足x-w/2>=8、x+w/2<=120、z-d/2>=8、z+d/2<=120。建议从suggestedCenters选择互不重复的空地中心，宽深选6–16米，必须放4–8栋建筑和2–4个掩体，不得返回空建筑数组。营地区块[0,0]的outpost必须为null，其他区块必须包含四个敌人出生点。name必须自拟一个有特色的中文街区名，禁止输出reference或结构示例中的name。提供的reference是已可行的道路和出生点布局，建议保留其roads并从空地选择建筑，改变建筑数量、长宽、高度和掩体位置形成不同街区；不要把建筑移到道路上。组件相互至少间隔1米，建筑外缘与道路中线至少相隔4米，任何地标、补给、出生点周围留出1.2米空间。所有点坐标在[4,124]内。优先少量建筑形成不同广场、街巷与屋顶轮廓。地标为地面标志，不能被建筑遮挡。四个敌人出生点相距至少2.5米。若提供correction，则根据其中error修改previousOutput的错误，仍输出完整JSON，不要重复无效布局。',
               },
               {
                 role: 'user',

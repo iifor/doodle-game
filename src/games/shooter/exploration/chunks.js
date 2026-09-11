@@ -10,7 +10,7 @@ import { buildHouse } from './interior-geometry.js';
 import { buildRoadside } from './roadside.js';
 import { SIZE, keyOf, address, localPosition } from './schema.js';
 
-function sign(root, text, x, y, z, width, ink, north = false) {
+function sign(root, text, x, y, z, width, ink, north = false, yaw = 0) {
   if (typeof document === 'undefined') return;
   const canvas = document.createElement('canvas');
   canvas.width = 1024;
@@ -35,7 +35,7 @@ function sign(root, text, x, y, z, width, ink, north = false) {
     );
   material.addEventListener('dispose', () => texture.dispose());
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, width / 8), material);
-  if (north) mesh.rotation.y = Math.PI;
+  mesh.rotation.y = (north ? Math.PI : 0) + yaw;
   mesh.position.set(x, y, z);
   root.add(mesh);
 }

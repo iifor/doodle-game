@@ -65,11 +65,34 @@ function accessPaths(layout, goals) {
   return [...reserved].map((c) => [(c % 64) * 2 + 1, Math.floor(c / 64) * 2 + 1]);
 }
 
+export const SIGN_TEXT = [
+  '前方路口',
+  '住宅区',
+  '施工慢行',
+  '沿路探索',
+  '限速 30',
+  '注意行人',
+  '货运通道',
+  '前方积水',
+];
+// Each kind carries its own quota and its own distance from the road centre line, so
+// street furniture lands at the kerb while soil and greenery stay off the carriageway.
+// The road is eight metres wide, so anything solid needs at least 5.5 metres of offset.
+// Kerb furniture is oriented: its long side runs along the street it belongs to.
+const KINDS = {
+  sign: { quota: [3, 2], offset: [5.6, 1.2], kerb: true, oriented: true, dims: [3.4, 1] },
+  barrier: { quota: [3, 3], offset: [5.5, 1.5], kerb: true, oriented: true, dims: [3.2, 1] },
+  puddle: { quota: [3, 3], offset: [0.5, 2.8], kerb: false, dims: [4.5, 3] },
+  mound: { quota: [2, 2], offset: [7, 5], kerb: false, dims: [5.5, 4.5] },
+  rock: { quota: [5, 4], offset: [6, 7], kerb: false, dims: [1.8, 1.6] },
+  grass: { quota: [8, 6], offset: [6, 9], kerb: false, dims: [2, 2] },
+};
+
 export function roadsidePlan(block) {
   const l = block.layout;
   if (l.interior || l.interiorVersion || l.schemaVersion === 2) return [];
   let state = hash(
-    `roadside-v1:${block.x},${block.z}:${JSON.stringify([l.name, l.roads, l.buildings, l.cover])}`,
+    `roadside-v2:${block.x},${block.z}:${JSON.stringify([l.name, l.roads, l.buildings, l.cover])}`,
   );
   const random = () => {
     state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
@@ -85,52 +108,50 @@ export function roadsidePlan(block) {
     roads = l.roads.map(roadRect),
     obstacles = [...l.buildings, ...l.cover],
     items = [];
-  const kinds = ['puddle', 'barrier', 'sign', 'mound', 'rock', 'grass'];
-  const count = 44 + Math.floor(random() * 21);
-  for (let attempt = 0; attempt < 900 && items.length < count; attempt++) {
-    const kind = kinds[items.length % kinds.length],
-      road = l.roads[Math.floor(random() * l.roads.length)];
-    const horizontal = road[1] === road[3];
-    let x = 10 + random() * 108,
-      z = 10 + random() * 108;
-    if (random() < 0.7) {
-      const t = 0.08 + random() * 0.84,
-        offset = (random() < 0.5 ? -1 : 1) * (kind === 'puddle' ? 2 + random() * 3 : 7 + random() * 7);
-      x = road[0] + (road[2] - road[0]) * t + (horizontal ? 0 : offset);
-      z = road[1] + (road[3] - road[1]) * t + (horizontal ? offset : 0);
+  for (const [kind, spec] of Object.entries(KINDS)) {
+    const quota = spec.quota[0] + Math.floor(random() * (spec.quota[1] + 1));
+    for (let attempt = 0, placed = 0; attempt < 160 && placed < quota; attempt++) {
+      const road = l.roads[Math.floor(random() * l.roads.length)];
+      const horizontal = road[1] === road[3];
+      let x, z;
+      // Kerb furniture always belongs to a street; scenery may also fill an empty lot.
+      if (spec.kerb || random() < 0.75) {
+        const t = 0.12 + random() * 0.76,
+          offset = (random() < 0.5 ? -1 : 1) * (spec.offset[0] + random() * spec.offset[1]);
+        x = road[0] + (road[2] - road[0]) * t + (horizontal ? 0 : offset);
+        z = road[1] + (road[3] - road[1]) * t + (horizontal ? offset : 0);
+      } else {
+        x = 10 + random() * 108;
+        z = 10 + random() * 108;
+      }
+      x = Math.round(x * 2) / 2;
+      z = Math.round(z * 2) / 2;
+      const size = 0.8 + random() * 0.5;
+      const dims = spec.oriented && !horizontal ? [spec.dims[1], spec.dims[0]] : spec.dims;
+      const item = {
+        kind,
+        x,
+        z,
+        w: dims[0] * size,
+        d: dims[1] * size,
+        h: kind === 'mound' ? 0.8 + Math.floor(random() * 3) * 0.2 : 1,
+        horizontal,
+        variant: Math.floor(random() * SIGN_TEXT.length),
+      };
+      if (x - item.w / 2 < 6 || x + item.w / 2 > 122 || z - item.d / 2 < 6 || z + item.d / 2 > 122) continue;
+      if (obstacles.some((o) => overlaps(item, o, 1.4)) || items.some((o) => overlaps(item, o, 1.5)))
+        continue;
+      if (goals.some(([a, b]) => overlaps(item, { x: a, z: b, w: 0, d: 0 }, 4))) continue;
+      if (
+        kind !== 'puddle' &&
+        kind !== 'grass' &&
+        (roads.some((o) => overlaps(item, o, 0.8)) ||
+          paths.some(([a, b]) => overlaps(item, { x: a, z: b, w: 0, d: 0 }, 1.5)))
+      )
+        continue;
+      items.push(item);
+      placed++;
     }
-    x = Math.round(x * 2) / 2;
-    z = Math.round(z * 2) / 2;
-    const size = 0.8 + random() * 0.5;
-    const dims = {
-      puddle: [4.5, 3],
-      barrier: horizontal ? [3.2, 1] : [1, 3.2],
-      sign: [3.4, 1],
-      mound: [5.5, 4.5],
-      rock: [1.8, 1.6],
-      grass: [2, 2],
-    }[kind];
-    const item = {
-      kind,
-      x,
-      z,
-      w: dims[0] * size,
-      d: dims[1] * size,
-      h: kind === 'mound' ? 0.8 + Math.floor(random() * 3) * 0.2 : 1,
-      horizontal,
-      variant: Math.floor(random() * 4),
-    };
-    if (x - item.w / 2 < 6 || x + item.w / 2 > 122 || z - item.d / 2 < 6 || z + item.d / 2 > 122) continue;
-    if (obstacles.some((o) => overlaps(item, o, 1.4)) || items.some((o) => overlaps(item, o, 1.5))) continue;
-    if (goals.some(([a, b]) => overlaps(item, { x: a, z: b, w: 0, d: 0 }, 4))) continue;
-    if (
-      kind !== 'puddle' &&
-      kind !== 'grass' &&
-      (roads.some((o) => overlaps(item, o, 0.8)) ||
-        paths.some(([a, b]) => overlaps(item, { x: a, z: b, w: 0, d: 0 }, 1.5)))
-    )
-      continue;
-    items.push(item);
   }
   return items;
 }
@@ -184,9 +205,7 @@ export function buildRoadside(b, block, sign) {
         continue;
       paint(x, z, horizontal ? 3 : 0.16, horizontal ? 0.16 : 3, 0.04, INK.GOLD);
     }
-    // Set back from both endpoints so pedestrian crossings do not fill junctions.
-    if (hi - lo >= 28) {
-      const along = lo + 12;
+    const crossing = (along) => {
       for (let offset = -2.8; offset <= 2.8; offset += 1.1)
         paint(
           horizontal ? along : r.x + offset,
@@ -196,7 +215,20 @@ export function buildRoadside(b, block, sign) {
           0.042,
           INK.ORANGE,
         );
+    };
+    // Crossings belong on the approach to a real junction, set back so they never
+    // paint over the junction itself. A street with no junction gets one mid-block.
+    const junctions = [];
+    for (const [i, other] of l.roads.entries()) {
+      if (i === index || (other[1] === other[3]) === horizontal) continue;
+      const at = horizontal ? other[0] : other[1];
+      const [near, far] = horizontal ? [other[1], other[3]] : [other[0], other[2]];
+      if (r[horizontal ? 'z' : 'x'] < Math.min(near, far) - 4) continue;
+      if (r[horizontal ? 'z' : 'x'] > Math.max(near, far) + 4) continue;
+      if (at > lo + 10 && at < hi - 10 && !junctions.includes(at)) junctions.push(at);
     }
+    if (junctions.length) for (const at of junctions.slice(0, 2)) crossing(at - 7);
+    else if (hi - lo >= 28) crossing(lo + 12);
   }
   const items = roadsidePlan(block);
   b.L.roadside = items;
@@ -238,27 +270,24 @@ export function buildRoadside(b, block, sign) {
         );
     } else if (a.kind === 'sign') {
       b.box(x, 0, z, 0.16, 2.6, 0.16, { ink: INK.BLACK, noCollide: true });
-      b.box(x, 1.9, z, w, 0.75, 0.16, { ink: INK.GREEN, noCollide: true });
+      b.box(x, 1.9, z, a.horizontal ? w : 0.16, 0.75, a.horizontal ? 0.16 : d, {
+        ink: INK.GREEN,
+        noCollide: true,
+      });
       b.collider(x, 0, z, 0.2, 2.6, 0.2, { tag: 'roadside-sign' });
-      sign(
-        b.scene,
-        ['前方路口', '住宅区', '施工慢行', '沿路探索'][a.variant],
-        x,
-        2.27,
-        z - 0.09,
-        w * 0.9,
-        INK.GREEN,
-        true,
-      );
-      sign(
-        b.scene,
-        ['前方路口', '住宅区', '施工慢行', '沿路探索'][a.variant],
-        x,
-        2.27,
-        z + 0.09,
-        w * 0.9,
-        INK.GREEN,
-      );
+      // The board turns to face across its own street, so a north-south road is not read edge-on.
+      for (const face of [-1, 1])
+        sign(
+          b.scene,
+          SIGN_TEXT[a.variant],
+          x + (a.horizontal ? 0 : face * 0.09),
+          2.27,
+          z + (a.horizontal ? face * 0.09 : 0),
+          (a.horizontal ? w : d) * 0.9,
+          INK.GREEN,
+          face < 0,
+          a.horizontal ? 0 : Math.PI / 2,
+        );
     } else if (a.kind === 'rock') {
       b.box(x, 0, z, w, 0.35, d, { ink: INK.BROWN, tag: 'roadside-rock' });
       b.box(x + w * 0.1, 0.35, z, w * 0.55, 0.28, d * 0.6, { ink: INK.BLACK, tag: 'roadside-rock' });
