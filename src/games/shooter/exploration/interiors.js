@@ -80,6 +80,10 @@ export const interiorExample = {
     },
   ],
 };
+// A centre corridor splits the plan in two; a side corridor hugs one outside wall and
+// gives the other side rooms twice as deep. Older saved plans have no `corridor` key,
+// so it is only written back when the plan supplied one and their bytes stay the same.
+export const CORRIDORS = ['centre', 'left', 'right'];
 export function validateInteriorPlan(raw) {
   requireWorld(
     raw &&
@@ -92,6 +96,11 @@ export function validateInteriorPlan(raw) {
   requireWorld(['blue', 'green', 'orange'].includes(raw.palette), '室内配色无效');
   requireWorld([20, 24, 28].includes(raw.width) && [24, 28, 32].includes(raw.depth), '室内尺寸无效');
   requireWorld(
+    raw.corridor === undefined || CORRIDORS.includes(raw.corridor),
+    '走廊形式只能是 centre、left 或 right',
+  );
+  const corridor = raw.corridor ?? 'centre';
+  requireWorld(
     Array.isArray(raw.floors) && raw.floors.length >= 1 && raw.floors.length <= 3,
     '建筑须有一至三层',
   );
@@ -99,9 +108,17 @@ export function validateInteriorPlan(raw) {
     Object.fromEntries(
       ['left', 'right'].map((side) => {
         const rooms = floor?.[side];
+        // The side a wall-hugging corridor runs down carries no rooms at all.
+        if (corridor === side) {
+          requireWorld(
+            Array.isArray(rooms) && rooms.length === 0,
+            `走廊贴着 ${side} 侧外墙时，该侧必须是空数组`,
+          );
+          return [side, []];
+        }
         requireWorld(
           Array.isArray(rooms) && rooms.length >= 1 && rooms.length <= 3,
-          '每层走廊两侧各须有一至三个房间',
+          corridor === 'centre' ? '每层走廊两侧各须有一至三个房间' : '走廊另一侧须有一至三个房间',
         );
         return [
           side,
@@ -124,12 +141,34 @@ export function validateInteriorPlan(raw) {
     ground.some((r) => r.type === 'living') && ground.some((r) => r.type === 'kitchen'),
     '一层必须有客厅和厨房',
   );
-  return { name: raw.name.trim(), palette: raw.palette, width: raw.width, depth: raw.depth, floors };
+  return {
+    name: raw.name.trim(),
+    palette: raw.palette,
+    width: raw.width,
+    depth: raw.depth,
+    ...(raw.corridor === undefined ? {} : { corridor }),
+    floors,
+  };
+}
+// Where the corridor sits, in local metres. `walk` is the through lane and `stair` is
+// the flight beside it, so climbing never closes the route to the rooms further back.
+export function corridorBounds(plan) {
+  const x0 = 64 - plan.width / 2,
+    x1 = 64 + plan.width / 2;
+  // A centre corridor keeps the original lanes so existing plans expand unchanged.
+  const b =
+    (plan.corridor ?? 'centre') === 'centre'
+      ? { lo: 61, hi: 69, walk: 62.5, stair: 65.5, stairW: 2.6 }
+      : plan.corridor === 'left'
+        ? { lo: x0, hi: x0 + 3.2, walk: x0 + 2.3, stair: x0 + 0.8, stairW: 1.4 }
+        : { lo: x1 - 3.2, hi: x1, walk: x1 - 2.3, stair: x1 - 0.8, stairW: 1.4 };
+  return { x0, x1, ...b, hole: [b.stair - b.stairW / 2 - 0.1, b.stair + b.stairW / 2 + 0.1] };
 }
 export function expandHouse(plan, building) {
   plan = validateInteriorPlan(plan);
   const id = building.id;
   parseInteriorId(id);
+  const walk = corridorBounds(plan).walk;
   return {
     interiorVersion: INTERIOR_VERSION,
     sceneId: id,
@@ -141,13 +180,13 @@ export function expandHouse(plan, building) {
     w: plan.width,
     d: plan.depth,
     h: plan.floors.length * 4,
-    entrance: [62.5, 64 - plan.depth / 2 + 2.5],
+    entrance: [walk, 64 - plan.depth / 2 + 2.5],
     exteriorDoor: building.door,
     roads: [],
     buildings: [],
     cover: [],
-    landmark: [62.5, 64],
-    supply: [62.5, 64 - plan.depth / 2 + 2.5],
+    landmark: [walk, 64],
+    supply: [walk, 64 - plan.depth / 2 + 2.5],
     outpost: null,
   };
 }

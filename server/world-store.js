@@ -620,7 +620,7 @@ export function deepSeekGenerator({
                 content:
                   '你是涂鸦游戏场景设计师，只返回完整 JSON。输出必须使用example的对象结构和英文键名，不要添加theme、result、data、example等包装层。example表示输出结构，context是只读背景。名称使用有特色的中文，不要照抄例子。name最多30字符，sign最多24字符，background最多500字符，style最多300字符。修正correction中指出的错误后仍输出完整对象。' +
                   (design.kind === 'house'
-                    ? '本次设计可探索的住宅室内。顶层只有name、palette、width、depth、floors。palette为blue/green/orange；width只能20/24/28，depth只能24/28/32。自主决定一至三层，floors每项有left和right数组，各一至三个房间；房间只有type、window布尔值、connecting布尔值。type只能living/kitchen/bedroom/bathroom/study/storage/dining。一层必须有客厅living和厨房kitchen。window决定该房间是否有外窗，connecting决定是否有通往同侧下一个房间的门。其他楼层用途、房间数量与窗户自由搭配，不要照抄示例。引擎负责中央走廊、门洞、楼板和连续楼梯，禁止输出坐标或可执行代码。'
+                    ? '本次设计可探索的住宅室内。顶层只有name、palette、width、depth、corridor、floors。palette为blue/green/orange；width只能20/24/28，depth只能24/28/32。corridor决定走廊形式：centre为居中走廊、两侧都有房间；left或right表示走廊贴着该侧外墙，那一侧必须是空数组，另一侧房间进深加倍。请在两种形式之间自由选择，不要每栋都用centre。自主决定一至三层，floors每项有left和right数组；有房间的一侧一至三个房间。房间只有type、window布尔值、connecting布尔值。type只能living/kitchen/bedroom/bathroom/study/storage/dining。一层必须有客厅living和厨房kitchen。window决定该房间是否有外窗，connecting决定是否有通往同侧下一个房间的门。逐层改变用途、房间数量与窗户，不要照抄示例，也不要每层完全相同。引擎负责走廊、门洞、楼板、连续楼梯和家具摆放，禁止输出坐标或可执行代码。'
                     : design.kind === 'theme'
                       ? '本次只生成世界主题，顶层必须包含background字符串、name字符串、style字符串、districts数组。districts恰好两个对象，每个只有name和style字符串。'
                       : '本次生成建筑模板变化：palette只能blue/green/orange；decoration只能awning/stripes/plain；slots恰好四项，每项只能empty/shelf/crate/table。不得输出坐标或改变结构。street顶层只有name和buildings，buildings逐一保留example中的id；interior顶层只有name、sign、palette、decoration、slots，风格与context中的外观一致。'),

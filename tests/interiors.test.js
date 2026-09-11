@@ -15,6 +15,7 @@ import {
   dynamicScene,
   houseEntry,
   blockKey,
+  corridorBounds,
 } from '../src/games/shooter/exploration/interiors.js';
 import { buildChunk, Chunks } from '../src/games/shooter/exploration/chunks.js';
 import { World, makeBody } from '../src/games/shooter/physics.js';
@@ -207,6 +208,104 @@ test('actual collision permits every room, stairs up and down, and keeps windows
         disposeTree(built.root);
       }
   }
+});
+
+test('corridor form is optional, checked, and absent plans keep their original bytes', () => {
+  const centre = structuredClone(interiorExample);
+  // An older cached plan has no corridor key and must expand to exactly what it did before.
+  assert.equal(validateInteriorPlan(centre).corridor, undefined);
+  assert.equal(JSON.stringify(validateInteriorPlan(centre)), JSON.stringify(centre));
+  assert.deepEqual(corridorBounds(centre), corridorBounds({ ...centre, corridor: 'centre' }));
+  assert.equal(expandHouse(centre, enterableBuildings(street())[0]).entrance[0], 62.5);
+  for (const [plan, pattern] of [
+    [{ ...centre, corridor: 'middle' }, /centre、left 或 right/],
+    // A wall-hugging corridor cannot have rooms on the side it runs down.
+    [{ ...centre, corridor: 'left' }, /必须是空数组/],
+    [{ ...centre, corridor: 'left', floors: [{ left: [], right: [] }] }, /走廊另一侧须有一至三个房间/],
+    [
+      {
+        ...centre,
+        corridor: 'right',
+        floors: [{ left: [{ type: 'bedroom', window: true, connecting: false }], right: [] }],
+      },
+      /一层必须有客厅和厨房/,
+    ],
+  ])
+    assert.throws(() => validateInteriorPlan(plan), pattern);
+  const side = {
+    ...centre,
+    corridor: 'right',
+    floors: [
+      {
+        left: [
+          { type: 'living', window: true, connecting: true },
+          { type: 'kitchen', window: true, connecting: false },
+        ],
+        right: [],
+      },
+    ],
+  };
+  assert.equal(validateInteriorPlan(side).corridor, 'right');
+  const l = expandHouse(side, enterableBuildings(street())[0]);
+  assert.equal(l.entrance[0], corridorBounds(side).walk);
+  assert.equal(JSON.stringify(l.plan), JSON.stringify(validateInteriorPlan(side)));
+});
+
+test('a wall-hugging corridor still reaches every room and both ends of the stairs', () => {
+  for (const corridor of ['left', 'right'])
+    for (const rooms of [1, 3])
+      for (const width of [20, 28]) {
+        const side = corridor === 'left' ? 'right' : 'left';
+        const p = structuredClone(interiorExample);
+        Object.assign(p, { corridor, width, depth: 32 });
+        p.floors = Array.from({ length: 2 }, () => ({
+          [corridor]: [],
+          [side]: [
+            { type: 'living', window: true, connecting: true },
+            { type: 'kitchen', window: true, connecting: false },
+            { type: 'bedroom', window: true, connecting: false },
+          ].slice(0, rooms),
+        }));
+        if (rooms === 1) for (const f of p.floors) f[side] = [{ ...f[side][0], type: 'kitchen' }];
+        // A single-room floor still needs a living room downstairs.
+        p.floors[0][side] = [
+          { type: 'living', window: true, connecting: true },
+          { type: 'kitchen', window: true, connecting: false },
+          { type: 'bedroom', window: true, connecting: false },
+        ].slice(0, Math.max(2, rooms));
+        const l = expandHouse(p, enterableBuildings(street())[0]);
+        const c = corridorBounds(p);
+        const built = buildChunk({ x: 0, z: 0, layout: l });
+        const z0 = 64 - p.depth / 2,
+          end = z0 + 11.3;
+        const body = makeBody(new THREE.Vector3(l.entrance[0], 0, l.entrance[1]), 0.36, 1.85);
+        assert.equal(built.world.overlapsBody(body), false);
+        try {
+          for (let f = 0; f < 2; f++) {
+            const floorRooms = p.floors[f][side].length;
+            for (let i = 0; i < floorRooms; i++) {
+              const z = z0 + (p.depth * (i + 0.5)) / floorRooms;
+              walk(built.world, body, c.walk, z);
+              // Step well into the room, past where the deep-room furniture stands.
+              walk(built.world, body, corridor === 'left' ? c.x1 - 3 : c.x0 + 3, z);
+              walk(built.world, body, c.walk, z);
+            }
+            if (f === 0) {
+              walk(built.world, body, c.walk, z0 + 3);
+              walk(built.world, body, c.stair, z0 + 3);
+              walk(built.world, body, c.stair, end + 1);
+              assert.ok(Math.abs(body.pos.y - 4) < 0.01, 'the flight arrives on the next floor');
+              walk(built.world, body, c.walk, end + 1);
+            }
+          }
+          walk(built.world, body, c.stair, end + 1);
+          walk(built.world, body, c.stair, z0 + 3);
+          assert.ok(Math.abs(body.pos.y) < 0.01, 'the flight descends');
+          walk(built.world, body, l.entrance[0], l.entrance[1]);
+        } finally {
+          disposeTree(built.root);
+        }
+      }
 });
 
 test('indoor instances share no outdoor coordinates or rendering and unload on leaving', async () => {
