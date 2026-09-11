@@ -61,6 +61,108 @@ const number = (n, min, max) => Number.isFinite(n) && n >= min && n <= max;
 const point = (p) => Array.isArray(p) && p.length === 2 && p.every((n) => number(n, 4, 124));
 const text = (v) =>
   typeof v === 'string' && v.trim().length > 0 && v.length <= 40 && !/[\p{Cc}\p{Cf}]/u.test(v);
+
+// Roof access and rooftop routes are named archetypes, not stored geometry: the model
+// picks a type and an anchor, and both the validator and the builder expand the same
+// fixed dimensions. A layout without `structures` expands to nothing and keeps its
+// original bytes, so saved worlds still match their checksum.
+export const STRUCTURE_TYPES = ['stair', 'bridge'];
+export const MAX_STRUCTURES = 8;
+export const STAIR_TREADS = 14;
+export const STAIR_RUN = 0.45;
+export const STAIR_FLIGHT = STAIR_TREADS * STAIR_RUN;
+export const STAIR_LANDING = 2.2;
+export const STAIR_SPAN = STAIR_FLIGHT + 2 * STAIR_LANDING; // a flight plus a landing at each end
+export const STAIR_DEPTH = 4.4; // two alternating lanes and the landing depth
+export const BRIDGE_WIDTH = 2.4;
+export const BRIDGE_RISE = 4; // the tallest step flight a deck can carry to the higher roof
+export const FACES = {
+  north: [0, -1],
+  south: [0, 1],
+  west: [-1, 0],
+  east: [1, 0],
+};
+export function expandStructures(raw, buildings) {
+  if (raw.structures === undefined) return [];
+  requireWorld(
+    Array.isArray(raw.structures) && raw.structures.length <= MAX_STRUCTURES,
+    `附属结构数量无效，最多 ${MAX_STRUCTURES} 个`,
+  );
+  return raw.structures.map((s) => {
+    requireWorld(s && STRUCTURE_TYPES.includes(s.type), '附属结构类型无效，只能是 stair 或 bridge');
+    if (s.type === 'stair') {
+      requireWorld(
+        Number.isInteger(s.building) && s.building >= 0 && s.building < buildings.length,
+        '楼梯的 building 必须是 buildings 的下标',
+      );
+      requireWorld(s.face in FACES, '楼梯的 face 只能是 north/south/east/west');
+      const host = buildings[s.building],
+        [nx, nz] = FACES[s.face];
+      const along = nx ? host.d : host.w;
+      requireWorld(
+        along >= STAIR_SPAN,
+        `楼梯所在立面长 ${along} 米，不足 ${STAIR_SPAN} 米；请换一面或加长建筑`,
+      );
+      const reach = (nx ? host.w : host.d) / 2 + STAIR_DEPTH / 2;
+      return {
+        type: 'stair',
+        building: s.building,
+        face: s.face,
+        host,
+        flights: Math.max(1, Math.ceil(host.h / 4)),
+        rect: {
+          x: host.x + nx * reach,
+          z: host.z + nz * reach,
+          w: nx ? STAIR_DEPTH : STAIR_SPAN,
+          d: nx ? STAIR_SPAN : STAIR_DEPTH,
+        },
+      };
+    }
+    requireWorld(
+      [s.from, s.to].every((i) => Number.isInteger(i) && i >= 0 && i < buildings.length) && s.from !== s.to,
+      '天桥的 from 和 to 必须是两栋不同建筑的下标',
+    );
+    const a = buildings[s.from],
+      c = buildings[s.to];
+    const spanX = Math.abs(a.x - c.x) > Math.abs(a.z - c.z);
+    const gap = spanX ? Math.abs(a.x - c.x) - (a.w + c.w) / 2 : Math.abs(a.z - c.z) - (a.d + c.d) / 2;
+    requireWorld(number(gap, 4, 30), `天桥跨度 ${gap.toFixed(1)} 米超出 4–30 米`);
+    const lo = spanX ? Math.max(a.z - a.d / 2, c.z - c.d / 2) : Math.max(a.x - a.w / 2, c.x - c.w / 2);
+    const hi = spanX ? Math.min(a.z + a.d / 2, c.z + c.d / 2) : Math.min(a.x + a.w / 2, c.x + c.w / 2);
+    requireWorld(hi - lo >= BRIDGE_WIDTH + 1, '天桥两端建筑在横向没有足够重合，无法搭出通路');
+    // The deck is laid flush with the lower roof and the engine steps up to the higher
+    // one, so a bridge always lands somewhere you can stand.
+    const rise = Math.abs(a.h - c.h);
+    requireWorld(rise <= BRIDGE_RISE, `天桥两端屋顶相差 ${rise} 米，超过 ${BRIDGE_RISE} 米无法接上`);
+    requireWorld(
+      rise <= 0.4 || gap >= STAIR_FLIGHT + 2.7,
+      `天桥两端有 ${rise} 米落差，跨度需要至少 ${STAIR_FLIGHT + 2.7} 米才放得下接续台阶`,
+    );
+    // The deck runs between the two facing facades and is centred on their overlap.
+    const [first, second] = spanX ? (a.x < c.x ? [a, c] : [c, a]) : a.z < c.z ? [a, c] : [c, a];
+    const start = spanX ? first.x + first.w / 2 : first.z + first.d / 2;
+    const end = spanX ? second.x - second.w / 2 : second.z - second.d / 2;
+    const centre = (lo + hi) / 2;
+    // A deck is elevated, so it never blocks the ground; it only has to miss other roofs.
+    return {
+      type: 'bridge',
+      from: s.from,
+      to: s.to,
+      y: Math.min(a.h, c.h),
+      rise,
+      // Which end of the deck the step flight climbs towards.
+      highEnd: rise <= 0.4 ? 0 : first.h > second.h ? -1 : 1,
+      spanX,
+      deck: {
+        x: spanX ? (start + end) / 2 : centre,
+        z: spanX ? centre : (start + end) / 2,
+        w: spanX ? end - start : BRIDGE_WIDTH,
+        d: spanX ? BRIDGE_WIDTH : end - start,
+      },
+      rect: null,
+    };
+  });
+}
 export function validateLayout(raw, seed, x, z) {
   coordinates(x, z);
   requireWorld(raw && text(raw.name), '区域名称无效');
@@ -94,6 +196,41 @@ export function validateLayout(raw, seed, x, z) {
       );
       rectangles.push(b);
     }
+  }
+  const structures = expandStructures(raw, raw.buildings);
+  for (const s of structures) {
+    if (s.type === 'bridge') {
+      // A deck must not drive through a third roof that stands above it.
+      requireWorld(
+        !raw.buildings.some(
+          (b, i) =>
+            i !== s.from &&
+            i !== s.to &&
+            b.h > s.y &&
+            Math.abs(b.x - s.deck.x) < (b.w + s.deck.w) / 2 &&
+            Math.abs(b.z - s.deck.z) < (b.d + s.deck.d) / 2,
+        ),
+        '天桥穿过了第三栋更高的建筑',
+      );
+      continue;
+    }
+    requireWorld(
+      s.rect.x - s.rect.w / 2 >= 8 &&
+        s.rect.x + s.rect.w / 2 <= 120 &&
+        s.rect.z - s.rect.d / 2 >= 8 &&
+        s.rect.z + s.rect.d / 2 <= 120,
+      `楼梯占用区块接缝：中心(${s.rect.x},${s.rect.z})；边缘必须在[8,120]`,
+    );
+    requireWorld(
+      !rectangles.some(
+        (a, i) =>
+          i !== s.building &&
+          Math.abs(a.x - s.rect.x) < (a.w + s.rect.w) / 2 + 1 &&
+          Math.abs(a.z - s.rect.z) < (a.d + s.rect.d) / 2 + 1,
+      ),
+      `楼梯与其它建筑或掩体重叠：中心(${s.rect.x},${s.rect.z})；请换一面墙`,
+    );
+    rectangles.push(s.rect);
   }
   const blocked = (x, z, r = 0.6) =>
     rectangles.some((b) => Math.abs(b.x - x) < b.w / 2 + r && Math.abs(b.z - z) < b.d / 2 + r);
@@ -205,6 +342,16 @@ export function validateLayout(raw, seed, x, z) {
     roads: raw.roads.map((r) => [...r]),
     buildings: raw.buildings.map(({ x, z, w, d, h }) => ({ x, z, w, d, h })),
     cover: raw.cover.map(({ x, z, w, d, h }) => ({ x, z, w, d, h })),
+    // Omitted entirely when absent, so a saved layout without structures keeps its checksum.
+    ...(raw.structures === undefined
+      ? {}
+      : {
+          structures: structures.map((s) =>
+            s.type === 'stair'
+              ? { type: 'stair', building: s.building, face: s.face }
+              : { type: 'bridge', from: s.from, to: s.to },
+          ),
+        }),
     landmark: [...raw.landmark],
     supply: [...raw.supply],
     outpost: camp

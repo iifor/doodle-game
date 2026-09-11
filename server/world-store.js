@@ -39,6 +39,7 @@ import {
   exits,
   connectingRoads,
   EXAMPLE_NAME,
+  hash,
 } from '../src/games/shooter/exploration/schema.js';
 
 export async function atomicWrite(file, data) {
@@ -580,8 +581,17 @@ export function deepSeekGenerator({
     const reference = {
       name: EXAMPLE_NAME,
       roads: connectingRoads(seed, x, z),
-      buildings: [{ x: 20, z: 20, w: 12, d: 12, h: 8 }],
-      cover: [{ x: 108, z: 108, w: 2, d: 2, h: 1 }],
+      buildings: [
+        { x: 46, z: 52, w: 14, d: 9, h: 13 },
+        { x: 80, z: 52, w: 12, d: 8, h: 9 },
+        { x: 20, z: 20, w: 12, d: 12, h: 6 },
+        { x: 108, z: 108, w: 12, d: 12, h: 16 },
+      ],
+      cover: [{ x: 44, z: 20, w: 2, d: 2, h: 1 }],
+      structures: [
+        { type: 'stair', building: 0, face: 'north' },
+        { type: 'bridge', from: 0, to: 1 },
+      ],
       landmark: [64, 64],
       supply: [68, 68],
       outpost:
@@ -597,6 +607,7 @@ export function deepSeekGenerator({
               ],
             },
     };
+    const offset = (a, b) => (hash(`${seed}:plot:${x}:${z}:${a}:${b}`) % 9) - 4;
     let correction = '';
     for (let attempt = 0; attempt < 2; attempt++) {
       const start = Date.now();
@@ -620,7 +631,9 @@ export function deepSeekGenerator({
               {
                 role: 'system',
                 content:
-                  '你是涂鸦城镇关卡设计师。只输出 JSON。区域128米见方，平地y=0。结构：{"name":"区域名","roads":[[x1,z1,x2,z2]],"buildings":[{"x":20,"z":20,"w":12,"d":12,"h":8}],"cover":[{"x":40,"z":20,"w":2,"d":2,"h":1}],"landmark":[64,64],"supply":[68,68],"outpost":{"center":[64,64],"spawns":[[52,52],[76,52],[52,76],[76,76]]}}。道路宽8米，轴对齐，必须连接给定四个出口且互通；可以用折线路段连接。道路1–24段，建筑不超过32个高度3–18米，掩体不超过32个高度0.7–2米。建筑和掩体的x,z是矩形中心坐标，不是左下角；w,d是完整宽深，h为高度。必须满足x-w/2>=8、x+w/2<=120、z-d/2>=8、z+d/2<=120。建议从suggestedCenters选择互不重复的空地中心，宽深选6–16米，必须放4–8栋建筑和2–4个掩体，不得返回空建筑数组。营地区块[0,0]的outpost必须为null，其他区块必须包含四个敌人出生点。name必须自拟一个有特色的中文街区名，禁止输出reference或结构示例中的name。提供的reference是已可行的道路和出生点布局，建议保留其roads并从空地选择建筑，改变建筑数量、长宽、高度和掩体位置形成不同街区；不要把建筑移到道路上。组件相互至少间隔1米，建筑外缘与道路中线至少相隔4米，任何地标、补给、出生点周围留出1.2米空间。所有点坐标在[4,124]内。优先少量建筑形成不同广场、街巷与屋顶轮廓。地标为地面标志，不能被建筑遮挡。四个敌人出生点相距至少2.5米。若提供correction，则根据其中error修改previousOutput的错误，仍输出完整JSON，不要重复无效布局。',
+                  '你是涂鸦城镇关卡设计师。只输出 JSON。区域128米见方，平地y=0。结构：{"name":"区域名","roads":[[x1,z1,x2,z2]],"buildings":[{"x":20,"z":20,"w":12,"d":12,"h":8}],"cover":[{"x":40,"z":20,"w":2,"d":2,"h":1}],"structures":[{"type":"stair","building":0,"face":"north"},{"type":"bridge","from":0,"to":1}],"landmark":[64,64],"supply":[68,68],"outpost":{"center":[64,64],"spawns":[[52,52],[76,52],[52,76],[76,76]]}}。道路宽8米，轴对齐，必须连接给定四个出口且互通；可以用折线路段连接。道路1–24段，建筑不超过32个高度3–18米，掩体不超过32个高度0.7–2米。建筑和掩体的x,z是矩形中心坐标，不是左下角；w,d是完整宽深，h为高度。必须满足x-w/2>=8、x+w/2<=120、z-d/2>=8、z+d/2<=120。必须放4–8栋建筑和2–4个掩体，不得返回空建筑数组。营地区块[0,0]的outpost必须为null，其他区块必须包含四个敌人出生点。name必须自拟一个有特色的中文街区名，禁止输出reference或结构示例中的name。提供的reference是已可行的道路和出生点布局，建议保留其roads并从空地选择建筑；不要把建筑移到道路上。组件相互至少间隔1米，建筑外缘与道路中线至少相隔4米，任何地标、补给、出生点周围留出1.2米空间。所有点坐标在[4,124]内。地标为地面标志，不能被建筑遮挡。四个敌人出生点相距至少2.5米。' +
+                  'structures是可选的附属结构，最多8个，只有stair和bridge两种，引擎按固定尺寸搭建，禁止输出坐标。stair在建筑某一面外侧搭一段直达屋顶的折返楼梯：building是buildings下标，face取north/south/east/west；该立面长度必须至少11米（north/south看w，east/west看d），楼梯向外占4.4米，不能压到道路、其它建筑或掩体。bridge在两栋屋顶之间架一条天桥：只有from和to两个字段，是两栋不同建筑的下标，桥面高度由引擎取较矮屋顶并自动补上通往较高屋顶的台阶，不要输出高度。两栋在横向重合至少3.4米，相对立面间距4–30米，两栋屋顶高差不超过4米（有高差时间距还需至少9米），中间不能夹着更高的第三栋。每个区块建议放1–2段楼梯和1–2座天桥，让屋顶成为可以上去的第二层战场，楼梯尽量选朝向空地、立面较长的高建筑。' +
+                  '追求街区之间有辨识度：不要把建筑排成整齐网格，在suggestedPlots附近自由偏移；从suggestedSizes里挑不同的宽深组合，混用狭长和方正的体块；至少两栋高度不低于12米，与低矮建筑拉开屋顶落差，形成广场、街巷和可攀爬的轮廓。若提供correction，则根据其中error修改previousOutput的错误，仍输出完整JSON，不要重复无效布局。',
               },
               {
                 role: 'user',
@@ -629,7 +642,19 @@ export function deepSeekGenerator({
                   exits: exits(seed, x, z),
                   neighbors,
                   reference,
-                  suggestedCenters: [20, 44, 84, 108].flatMap((a) => [20, 44, 84, 108].map((b) => [a, b])),
+                  // Jittered plots: a fixed lattice made every generated block look alike.
+                  suggestedPlots: [20, 44, 84, 108].flatMap((a) =>
+                    [18, 48, 80, 110].map((b) => [a + offset(a, b), b + offset(b, a)]),
+                  ),
+                  suggestedSizes: [
+                    [14, 9],
+                    [9, 14],
+                    [12, 12],
+                    [16, 10],
+                    [10, 16],
+                    [8, 8],
+                    [18, 9],
+                  ],
                   correction,
                 }),
               },

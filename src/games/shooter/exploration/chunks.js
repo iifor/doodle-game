@@ -8,6 +8,7 @@ import { sceneOf } from './region.js';
 import { enterableBuildings, blockKey } from './interiors.js';
 import { buildHouse } from './interior-geometry.js';
 import { buildRoadside } from './roadside.js';
+import { buildStructures } from './structures.js';
 import { SIZE, keyOf, address, localPosition } from './schema.js';
 
 function sign(root, text, x, y, z, width, ink, north = false, yaw = 0) {
@@ -102,14 +103,44 @@ export function buildChunk(block) {
     }
     b.box(a.x, 0, a.z, a.w, a.h, a.d);
     b.box(a.x, a.h, a.z, a.w, 0.2, a.d, { noCollide: true, ink: INK.ORANGE });
-    for (let y = 1.5; y + 1 < a.h; y += 3) {
-      b.box(a.x, y, a.z - a.d / 2 - 0.02, Math.min(2, a.w * 0.5), 1.1, 0.05, {
-        noCollide: true,
-        ink: INK.BLACK,
-      });
+    // Windows wrap all four elevations; a single glazed face left three blank walls.
+    for (const [nx, nz] of [
+      [0, -1],
+      [0, 1],
+      [-1, 0],
+      [1, 0],
+    ]) {
+      const along = nx ? a.d : a.w;
+      const bay = Math.min(2.4, along / 3);
+      const bays = Math.max(1, Math.min(2, Math.floor(along / (bay + 2))));
+      for (let i = 0; i < bays; i++) {
+        const offset = ((i + 0.5) / bays - 0.5) * along;
+        for (let y = 1.5; y + 1 < a.h; y += 3.5)
+          b.box(
+            a.x + nx * (a.w / 2 + 0.02) + (nx ? 0 : offset),
+            y,
+            a.z + nz * (a.d / 2 + 0.02) + (nz ? 0 : offset),
+            nx ? 0.05 : bay,
+            1.1,
+            nx ? bay : 0.05,
+            { noCollide: true, ink: INK.BLACK },
+          );
+      }
+    }
+    // A parapet gives a tall roof an edge worth taking cover behind.
+    if (a.h >= 10) {
+      const x1 = a.x - a.w / 2,
+        x2 = a.x + a.w / 2;
+      const z1 = a.z - a.d / 2,
+        z2 = a.z + a.d / 2;
+      b.rail(x1, z1, x2, z1, a.h);
+      b.rail(x1, z2, x2, z2, a.h);
+      b.rail(x1, z1, x1, z2, a.h);
+      b.rail(x2, z1, x2, z2, a.h);
     }
     b.ring(a.x, a.h + 2, a.z, 'y');
   }
+  buildStructures(b, l);
   for (const a of l.cover) b.box(a.x, 0, a.z, a.w, a.h, a.d, { ink: INK.ORANGE });
   for (const a of enterableBuildings(block)) {
     const front = a.z - a.d / 2;

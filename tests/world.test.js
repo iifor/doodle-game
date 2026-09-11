@@ -14,6 +14,8 @@ import {
   checksum,
   validateGeneratedLayout,
   EXAMPLE_NAME,
+  connectingRoads,
+  expandStructures,
 } from '../src/games/shooter/exploration/schema.js';
 import { Chunks, buildChunk } from '../src/games/shooter/exploration/chunks.js';
 import { roadsidePlan, buildRoadside, SIGN_TEXT } from '../src/games/shooter/exploration/roadside.js';
@@ -136,6 +138,147 @@ test('road sign boards turn to face across their own street', () => {
     }
     disposeTree(root);
   }
+});
+
+function roofLayout(seed) {
+  return validateLayout(
+    {
+      name: '屋顶街区',
+      roads: connectingRoads(seed, 1, 0),
+      buildings: [
+        { x: 46, z: 52, w: 14, d: 9, h: 13 },
+        { x: 80, z: 52, w: 12, d: 8, h: 9 },
+        { x: 20, z: 20, w: 12, d: 12, h: 6 },
+        { x: 108, z: 108, w: 12, d: 12, h: 16 },
+      ],
+      cover: [{ x: 44, z: 20, w: 2, d: 2, h: 1 }],
+      structures: [
+        { type: 'stair', building: 0, face: 'north' },
+        { type: 'bridge', from: 0, to: 1 },
+      ],
+      landmark: [64, 64],
+      supply: [68, 68],
+      outpost: {
+        center: [64, 64],
+        spawns: [
+          [56, 56],
+          [72, 56],
+          [56, 72],
+          [72, 72],
+        ],
+      },
+    },
+    seed,
+    1,
+    0,
+  );
+}
+
+test('a stair climbs to its roof and a bridge lands on the roof at each end', () => {
+  const block = { x: 1, z: 0, layout: roofLayout('roofs') },
+    built = buildChunk(block);
+  try {
+    const [stair, bridge] = expandStructures(block.layout, block.layout.buildings);
+    // Rails are noNav; only surfaces you can actually stand on count as treads.
+    const treads = (rect, low, high) =>
+      built.world.boxes
+        .filter(
+          (b) =>
+            !b.data.noNav &&
+            b.min.x >= rect.x - rect.w / 2 - 0.3 &&
+            b.max.x <= rect.x + rect.w / 2 + 0.3 &&
+            b.min.z >= rect.z - rect.d / 2 - 0.3 &&
+            b.max.z <= rect.z + rect.d / 2 + 0.3 &&
+            b.max.y >= low &&
+            b.max.y <= high,
+        )
+        .map((b) => Math.round(b.max.y * 100) / 100);
+    const steps = [...new Set(treads(stair.rect, 0, stair.host.h + 0.5))].sort((a, b) => a - b);
+    assert.ok(steps.length >= stair.flights * 10, `stair has ${steps.length} levels`);
+    assert.ok(Math.abs(steps.at(-1) - stair.host.h) < 0.01, 'the last landing is level with the roof');
+    for (let i = 1; i < steps.length; i++)
+      assert.ok(steps[i] - steps[i - 1] <= 0.35, `step rise ${(steps[i] - steps[i - 1]).toFixed(2)}m`);
+    const roofs = block.layout.buildings.map((b) => b.h);
+    assert.equal(bridge.y, Math.min(roofs[bridge.from], roofs[bridge.to]));
+    const deck = treads(bridge.deck, bridge.y, bridge.y);
+    assert.equal(deck.length, 1, 'the deck is one continuous slab at the lower roof height');
+    // With a height difference the deck must also reach the taller roof.
+    const climb = [...new Set(treads(bridge.deck, bridge.y, bridge.y + bridge.rise))].sort((a, b) => a - b);
+    assert.ok(Math.abs(climb.at(-1) - Math.max(roofs[bridge.from], roofs[bridge.to])) < 0.01);
+    for (let i = 1; i < climb.length; i++) assert.ok(climb[i] - climb[i - 1] <= 0.35);
+    const nav = new NavGrid(built.world, built.level.bounds, 2).build();
+    assert.ok(
+      nav.nodes.some(
+        (n) => n.y < 1 && Math.abs(n.x - bridge.deck.x) < 3 && Math.abs(n.z - bridge.deck.z) < 3,
+      ),
+      'the street under a bridge stays walkable',
+    );
+    assert.ok(
+      nav.nodes.some(
+        (n) =>
+          Math.abs(n.y - stair.host.h) < 0.3 &&
+          Math.abs(n.x - stair.host.x) < stair.host.w / 2 &&
+          Math.abs(n.z - stair.host.z) < stair.host.d / 2,
+      ),
+      'the roof the stair serves is a navigable surface',
+    );
+    const first = exits('roofs', 1, 0)[0];
+    for (const [x, z] of [block.layout.supply, block.layout.landmark, ...block.layout.outpost.spawns])
+      assert.ok(
+        nav.findPath(new THREE.Vector3(first[0], 0, first[1]), new THREE.Vector3(x, 0, z)),
+        `structures must not cut off ${x},${z}`,
+      );
+  } finally {
+    disposeTree(built.root);
+  }
+});
+
+test('unbuildable stairs and bridges are rejected with an error the model can act on', () => {
+  const base = roofLayout('rejects');
+  const withStructures = (structures) => ({ ...base, structures });
+  for (const [structures, pattern] of [
+    [[{ type: 'ramp', building: 0, face: 'north' }], /stair 或 bridge/],
+    [[{ type: 'stair', building: 9, face: 'north' }], /buildings 的下标/],
+    [[{ type: 'stair', building: 0, face: 'up' }], /north\/south\/east\/west/],
+    // Building 0 is 9m deep, so its east elevation is too short for a switchback.
+    [[{ type: 'stair', building: 0, face: 'east' }], /不足/],
+    [[{ type: 'bridge', from: 1, to: 1 }], /两栋不同建筑/],
+    // Buildings 0 and 2 are diagonal neighbours with no shared frontage.
+    [[{ type: 'bridge', from: 0, to: 2 }], /重合/],
+    // Building 3 is 16m tall against building 1 at 9m.
+    [[{ type: 'bridge', from: 1, to: 3 }], /跨度|相差/],
+    [[...Array(9)].map(() => ({ type: 'stair', building: 0, face: 'north' })), /数量无效/],
+  ])
+    assert.throws(() => validateLayout(withStructures(structures), 'rejects', 1, 0), pattern);
+  // Two stairs cannot share the same strip of pavement.
+  assert.throws(
+    () =>
+      validateLayout(
+        withStructures([
+          { type: 'stair', building: 0, face: 'north' },
+          { type: 'stair', building: 0, face: 'north' },
+        ]),
+        'rejects',
+        1,
+        0,
+      ),
+    /重叠/,
+  );
+  // A stair on the street side of a building near the edge would run off the chunk.
+  assert.throws(
+    () =>
+      validateLayout(
+        {
+          ...base,
+          buildings: [...base.buildings, { x: 16, z: 48, w: 9, d: 14, h: 8 }],
+          structures: [{ type: 'stair', building: 4, face: 'west' }],
+        },
+        'rejects',
+        1,
+        0,
+      ),
+    /区块接缝/,
+  );
 });
 
 test('mounds can be climbed, barriers stop walking and bullets, and shallow puddles stay walkable', () => {
