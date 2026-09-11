@@ -21,7 +21,9 @@ export function dynamicScene(p) {
 export function enterableBuildings(block) {
   if (!block || block.layout.interior || block.layout.schemaVersion === 2) return [];
   return block.layout.buildings.flatMap((b, index) => {
-    if (b.w < 6 || b.d < 6 || (index > 0 && hash(`${block.x},${block.z}:${index}`) % 3 === 0)) return [];
+    // An archetype is walked into directly, so it never also offers a doorway portal.
+    if (b.archetype || b.w < 6 || b.d < 6 || (index > 0 && hash(`${block.x},${block.z}:${index}`) % 3 === 0))
+      return [];
     // Put the portal immediately against the facade and reject obstructed doors.
     const door = { cx: block.x, cz: block.z, x: b.x, y: 0, z: b.z - b.d / 2 - 1.4 };
     if (

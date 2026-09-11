@@ -233,6 +233,91 @@ test('a stair climbs to its roof and a bridge lands on the roof at each end', ()
   }
 });
 
+function archetypeLayout(seed, buildings) {
+  return {
+    name: '形制街区',
+    roads: connectingRoads(seed, 1, 0),
+    buildings: buildings ?? [
+      { x: 46, z: 52, w: 14, d: 9, h: 13, archetype: 'tower' },
+      { x: 108, z: 108, w: 12, d: 12, h: 16, archetype: 'warehouse' },
+      { x: 20, z: 18, w: 16, d: 16, h: 6, archetype: 'courtyard' },
+      { x: 80, z: 52, w: 12, d: 8, h: 9 },
+    ],
+    cover: [{ x: 44, z: 20, w: 2, d: 2, h: 1 }],
+    landmark: [64, 64],
+    supply: [68, 68],
+    outpost: {
+      center: [64, 64],
+      spawns: [
+        [56, 56],
+        [72, 56],
+        [56, 72],
+        [72, 72],
+      ],
+    },
+  };
+}
+
+test('archetype buildings are walked into, stacked inside, and absent from plain saves', () => {
+  const seed = 'shapes';
+  const layout = validateLayout(archetypeLayout(seed), seed, 1, 0);
+  assert.deepEqual(
+    layout.buildings.map((b) => b.archetype),
+    ['tower', 'warehouse', 'courtyard', undefined],
+  );
+  // A plain volume must not gain the key, or every saved layout loses its checksum.
+  const plain = archetypeLayout(seed, [{ x: 46, z: 52, w: 14, d: 9, h: 13 }]);
+  assert.ok(!JSON.stringify(validateLayout(plain, seed, 1, 0)).includes('archetype'));
+  const block = { x: 1, z: 0, layout },
+    built = buildChunk(block);
+  try {
+    const [tower, warehouse, courtyard] = layout.buildings;
+    // Walking in is the whole point, so none of them also offers a doorway portal.
+    assert.deepEqual(
+      enterableBuildings(block).map((b) => b.index),
+      [3],
+    );
+    const nav = new NavGrid(built.world, built.level.bounds, 2).build();
+    const inside = (a, low, high, margin = 1) =>
+      nav.nodes.filter(
+        (n) =>
+          Math.abs(n.x - a.x) < a.w / 2 - margin &&
+          Math.abs(n.z - a.z) < a.d / 2 - margin &&
+          n.y >= low &&
+          n.y <= high,
+      );
+    // A tower is floor plates, so standing room comes at several heights.
+    const levels = new Set(inside(tower, 3, tower.h + 0.4).map((n) => Math.round(n.y)));
+    assert.ok(levels.size >= 3, `tower has ${levels.size} standable levels`);
+    // A warehouse has a shop floor, and a catwalk that hugs the walls above it.
+    assert.ok(inside(warehouse, 0, 0.4).length > 0, 'warehouse floor');
+    assert.ok(inside(warehouse, 4, warehouse.h - 3, 0).length > 0, 'warehouse catwalk');
+    // A courtyard is an open yard inside a wall ring you can walk along the top of.
+    assert.ok(inside(courtyard, 0, 0.4, 4).length > 0, 'courtyard yard');
+    assert.ok(inside(courtyard, courtyard.h - 0.4, courtyard.h + 0.4, 0).length > 0, 'courtyard wall walk');
+    // The ways in have to be wide enough for the pathfinder, not just visible.
+    const first = exits(seed, 1, 0)[0],
+      start = new THREE.Vector3(first[0], 0, first[1]);
+    for (const a of [warehouse, courtyard])
+      assert.ok(nav.findPath(start, new THREE.Vector3(a.x, 0, a.z)), `no way into ${a.archetype}`);
+  } finally {
+    disposeTree(built.root);
+  }
+});
+
+test('an archetype too small for its own insides is rejected', () => {
+  const seed = 'shapes';
+  for (const [building, pattern] of [
+    [{ x: 46, z: 52, w: 14, d: 9, h: 13, archetype: 'palace' }, /形制无效/],
+    // A tower needs 12m of height to be worth more than one floor plate.
+    [{ x: 46, z: 52, w: 14, d: 9, h: 9, archetype: 'tower' }, /tower 形制至少/],
+    // 9m of depth leaves no room for a catwalk ring and a flight between.
+    [{ x: 46, z: 52, w: 14, d: 9, h: 13, archetype: 'warehouse' }, /warehouse 形制至少/],
+    [{ x: 20, z: 18, w: 14, d: 14, h: 6, archetype: 'courtyard' }, /courtyard 形制至少/],
+  ])
+    assert.throws(() => validateLayout(archetypeLayout(seed, [building]), seed, 1, 0), pattern);
+});
+
 test('unbuildable stairs and bridges are rejected with an error the model can act on', () => {
   const base = roofLayout('rejects');
   const withStructures = (structures) => ({ ...base, structures });

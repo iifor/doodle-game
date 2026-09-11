@@ -76,6 +76,14 @@ export const STAIR_SPAN = STAIR_FLIGHT + 2 * STAIR_LANDING; // a flight plus a l
 export const STAIR_DEPTH = 4.4; // two alternating lanes and the landing depth
 export const BRIDGE_WIDTH = 2.4;
 export const BRIDGE_RISE = 4; // the tallest step flight a deck can carry to the higher roof
+// A building is a plain volume unless it names an archetype, and each archetype needs
+// room for its own insides. The validator and the builder read this one table, so a
+// layout that passes validation is a layout that can actually be assembled.
+export const BUILDING_ARCHETYPES = {
+  tower: { w: 8, d: 8, h: 12 },
+  warehouse: { w: 12, d: 12, h: 8 },
+  courtyard: { w: 16, d: 16, h: 4 },
+};
 export const FACES = {
   north: [0, -1],
   south: [0, 1],
@@ -196,6 +204,18 @@ export function validateLayout(raw, seed, x, z) {
       );
       rectangles.push(b);
     }
+  }
+  for (const b of raw.buildings) {
+    if (b.archetype === undefined) continue;
+    const min = BUILDING_ARCHETYPES[b.archetype];
+    requireWorld(
+      min,
+      `建筑形制无效，只能是 ${Object.keys(BUILDING_ARCHETYPES).join('、')}；普通方楼请省略 archetype`,
+    );
+    requireWorld(
+      b.w >= min.w && b.d >= min.d && b.h >= min.h,
+      `${b.archetype} 形制至少 ${min.w}×${min.d} 米、高 ${min.h} 米，当前 ${b.w}×${b.d}×${b.h}；请加大或改用普通方楼`,
+    );
   }
   const structures = expandStructures(raw, raw.buildings);
   for (const s of structures) {
@@ -340,7 +360,15 @@ export function validateLayout(raw, seed, x, z) {
   return {
     name: raw.name.trim(),
     roads: raw.roads.map((r) => [...r]),
-    buildings: raw.buildings.map(({ x, z, w, d, h }) => ({ x, z, w, d, h })),
+    // `archetype` is omitted when absent, so a saved layout of plain volumes keeps its bytes.
+    buildings: raw.buildings.map(({ x, z, w, d, h, archetype }) => ({
+      x,
+      z,
+      w,
+      d,
+      h,
+      ...(archetype === undefined ? {} : { archetype }),
+    })),
     cover: raw.cover.map(({ x, z, w, d, h }) => ({ x, z, w, d, h })),
     // Omitted entirely when absent, so a saved layout without structures keeps its checksum.
     ...(raw.structures === undefined
