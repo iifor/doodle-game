@@ -258,6 +258,63 @@ test('all enemy types spawn; a kill is counted once; expired bodies leave the in
   disposeTree(ctx.scene);
 });
 
+test('gun and katana hits lean the body away from the blow and shove it', () => {
+  const ctx = context();
+  const enemies = ctx.enemies;
+  const grunt = enemies.spawn('grunt', new THREE.Vector3(0, 0, 0));
+  grunt.yaw = 0;
+  grunt.state = 'hunt';
+  const before = grunt.body.vel.clone();
+  // yaw 0 faces +Z, so a shot traveling -Z is a hit in the chest.
+  enemies.damage(grunt, 18, {
+    source: 'rifle',
+    dir: new THREE.Vector3(0, 0, -1),
+    point: grunt.center.clone(),
+    part: 'torso',
+    crit: false,
+  });
+  assert.ok(grunt.flinch > 0.5, 'rifle sets a readable flinch');
+  assert.ok(grunt.hitBack > 0.5, 'a frontal shot leans the torso back');
+  assert.ok(grunt.flashT > 0.05);
+  assert.ok(grunt.body.vel.z < before.z, 'the shot shoves the body along the bullet');
+  const torsoX = grunt.J.torso.rotation.x;
+  enemies._animate(grunt, 0.016, new THREE.Vector3(0, 1.2, 8));
+  assert.ok(grunt.J.torso.rotation.x > torsoX + 0.15, 'flinch leans the torso in the pose');
+
+  const bruiser = enemies.spawn('grunt', new THREE.Vector3(4, 0, 0));
+  bruiser.yaw = 0;
+  bruiser.state = 'hunt';
+  bruiser.attackT = 0.4;
+  const vz = bruiser.body.vel.z;
+  enemies.damage(bruiser, 40, {
+    source: 'katana',
+    dir: new THREE.Vector3(0.2, 0, -1).normalize(),
+    point: bruiser.center.clone(),
+    part: 'torso',
+    crit: false,
+    slashDir: 1,
+  });
+  assert.ok(bruiser.flinch > grunt.flinch, 'a cut hits harder than a rifle tick');
+  assert.ok(bruiser.hitTwist > 0.3, 'slash direction twists the torso');
+  assert.ok(bruiser.body.vel.z < vz - 1.5, 'a cut launches the body');
+  assert.ok(bruiser.body.vel.y > 1, 'a cut lifts the feet');
+  assert.equal(bruiser.attackT, 0, 'a solid cut cancels their swing');
+
+  const sniped = enemies.spawn('grunt', new THREE.Vector3(8, 0, 0));
+  sniped.yaw = 0;
+  sniped.state = 'hunt';
+  enemies.damage(sniped, 50, {
+    source: 'sniper',
+    dir: new THREE.Vector3(1, 0, 0),
+    point: sniped.center.clone(),
+    part: 'head',
+    crit: true,
+  });
+  assert.ok(sniped.hitHead > 0.5, 'a headshot snaps the head');
+  assert.ok(Math.abs(sniped.hitSide) > 0.5, 'a side shot leans sideways');
+  disposeTree(ctx.scene);
+});
+
 test('resource teardown disposes shared geometry and material once per tree', () => {
   const root = new THREE.Group(),
     geometry = new THREE.BoxGeometry(),

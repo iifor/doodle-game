@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import * as THREE from 'three';
-import { WorldStore, deepSeekGenerator } from '../server/world-store.js';
+import { WorldStore, deepSeekGenerator, MAX_CORRECTIONS } from '../server/world-store.js';
 import {
   campLayout,
   exits,
@@ -242,6 +242,8 @@ function archetypeLayout(seed, buildings) {
       { x: 108, z: 108, w: 12, d: 12, h: 16, archetype: 'warehouse' },
       { x: 20, z: 18, w: 16, d: 16, h: 6, archetype: 'courtyard' },
       { x: 80, z: 52, w: 12, d: 8, h: 9 },
+      // The smallest courtyard: thinner walls keep a yard worth entering.
+      { x: 100, z: 20, w: 12, d: 12, h: 5, archetype: 'courtyard' },
     ],
     cover: [{ x: 44, z: 20, w: 2, d: 2, h: 1 }],
     landmark: [64, 64],
@@ -263,7 +265,7 @@ test('archetype buildings are walked into, stacked inside, and absent from plain
   const layout = validateLayout(archetypeLayout(seed), seed, 1, 0);
   assert.deepEqual(
     layout.buildings.map((b) => b.archetype),
-    ['tower', 'warehouse', 'courtyard', undefined],
+    ['tower', 'warehouse', 'courtyard', undefined, 'courtyard'],
   );
   // A plain volume must not gain the key, or every saved layout loses its checksum.
   const plain = archetypeLayout(seed, [{ x: 46, z: 52, w: 14, d: 9, h: 13 }]);
@@ -271,7 +273,7 @@ test('archetype buildings are walked into, stacked inside, and absent from plain
   const block = { x: 1, z: 0, layout },
     built = buildChunk(block);
   try {
-    const [tower, warehouse, courtyard] = layout.buildings;
+    const [tower, warehouse, courtyard, , small] = layout.buildings;
     // Walking in is the whole point, so none of them also offers a doorway portal.
     assert.deepEqual(
       enterableBuildings(block).map((b) => b.index),
@@ -295,14 +297,37 @@ test('archetype buildings are walked into, stacked inside, and absent from plain
     // A courtyard is an open yard inside a wall ring you can walk along the top of.
     assert.ok(inside(courtyard, 0, 0.4, 4).length > 0, 'courtyard yard');
     assert.ok(inside(courtyard, courtyard.h - 0.4, courtyard.h + 0.4, 0).length > 0, 'courtyard wall walk');
+    assert.ok(inside(small, 0, 0.4, 3).length > 0, 'the smallest courtyard still has a yard');
     // The ways in have to be wide enough for the pathfinder, not just visible.
     const first = exits(seed, 1, 0)[0],
       start = new THREE.Vector3(first[0], 0, first[1]);
-    for (const a of [warehouse, courtyard])
+    for (const a of [warehouse, courtyard, small])
       assert.ok(nav.findPath(start, new THREE.Vector3(a.x, 0, a.z)), `no way into ${a.archetype}`);
   } finally {
     disposeTree(built.root);
   }
+});
+
+test('a rejection names the component in the way, not just the rule it broke', () => {
+  const seed = 'blame';
+  const base = archetypeLayout(seed);
+  // A 2m cover in the road used to be reported as "a building blocks the road", which
+  // sent the model looking at the wrong component for every remaining correction round.
+  // Every seed routes one road up x=64 to the centre, so (64,40) is always paved.
+  assert.throws(
+    () => validateLayout({ ...base, cover: [{ x: 64, z: 40, w: 2, d: 2, h: 1 }] }, seed, 1, 0),
+    /道路\[[\d,]+\]被中心\(64,40\)、宽深\(2,2\)的掩体挡住/,
+  );
+  // An overlap names both rectangles, so it is clear which one has room to move.
+  assert.throws(
+    () => validateLayout({ ...base, cover: [{ x: 48, z: 52, w: 2, d: 2, h: 1 }] }, seed, 1, 0),
+    /中心\(48,52\)、宽深\(2,2\)的组件与中心\(46,52\)、宽深\(14,9\)的组件重叠/,
+  );
+  // So does a goal that landed under something.
+  assert.throws(
+    () => validateLayout({ ...base, supply: [46, 52] }, seed, 1, 0),
+    /点\(46,52\)被中心\(46,52\)、宽深\(14,9\)的建筑占住/,
+  );
 });
 
 test('an archetype too small for its own insides is rejected', () => {
@@ -313,7 +338,7 @@ test('an archetype too small for its own insides is rejected', () => {
     [{ x: 46, z: 52, w: 14, d: 9, h: 9, archetype: 'tower' }, /tower 形制至少/],
     // 9m of depth leaves no room for a catwalk ring and a flight between.
     [{ x: 46, z: 52, w: 14, d: 9, h: 13, archetype: 'warehouse' }, /warehouse 形制至少/],
-    [{ x: 20, z: 18, w: 14, d: 14, h: 6, archetype: 'courtyard' }, /courtyard 形制至少/],
+    [{ x: 20, z: 18, w: 10, d: 10, h: 6, archetype: 'courtyard' }, /courtyard 形制至少/],
   ])
     assert.throws(() => validateLayout(archetypeLayout(seed, [building]), seed, 1, 0), pattern);
 });
@@ -330,8 +355,8 @@ test('unbuildable stairs and bridges are rejected with an error the model can ac
     [[{ type: 'bridge', from: 1, to: 1 }], /两栋不同建筑/],
     // Buildings 0 and 2 are diagonal neighbours with no shared frontage.
     [[{ type: 'bridge', from: 0, to: 2 }], /重合/],
-    // Building 3 is 16m tall against building 1 at 9m.
-    [[{ type: 'bridge', from: 1, to: 3 }], /跨度|相差/],
+    // Building 3 sits in the far corner, so a rejection points at the pair that works.
+    [[{ type: 'bridge', from: 1, to: 3 }], /跨度.*超出 4–30 米。本区块可以架桥的相邻组合有：0与1/],
     [[...Array(9)].map(() => ({ type: 'stair', building: 0, face: 'north' })), /数量无效/],
   ])
     assert.throws(() => validateLayout(withStructures(structures), 'rejects', 1, 0), pattern);
@@ -844,8 +869,72 @@ test('damaged cached maps never silently regenerate', async (t) => {
   assert.equal(generated, 1);
 });
 
-test('DeepSeek output errors retry once; auth errors and cached-only mode never loop', async () => {
+test('an invalid map gets several rounds of correction; transport and auth errors do not', async () => {
   const context = { seed: 's', x: 1, z: 0, neighbors: [] };
+  // The validator reports only its first problem, so a layout with several mistakes
+  // needs several rounds. Each round must carry the errors already reported.
+  {
+    let count = 0;
+    const histories = [];
+    const generate = deepSeekGenerator({
+      key: 'test-only',
+      log() {},
+      fetchImpl: async (_url, opts) => {
+        count++;
+        const prompt = JSON.parse(JSON.parse(opts.body).messages[1].content);
+        if (count > 1) histories.push(prompt.correction.previousErrors ?? []);
+        // Three broken answers, then a good one on the last allowed round.
+        const layouts = [{}, { name: '半成品' }, { name: '半成品', roads: [] }, layout('s', 1, 0)];
+        return {
+          ok: true,
+          json: async () => ({
+            choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(layouts[count - 1]) } }],
+          }),
+        };
+      },
+    });
+    assert.equal((await generate(context)).name, '测试街区');
+    assert.equal(count, MAX_CORRECTIONS + 1);
+    assert.deepEqual(
+      histories.map((h) => h.length),
+      [0, 1, 2],
+    );
+  }
+  // One more broken answer than there are rounds gives up rather than looping.
+  {
+    let count = 0;
+    await assert.rejects(
+      deepSeekGenerator({
+        key: 'test-only',
+        log() {},
+        fetchImpl: async () => {
+          count++;
+          return {
+            ok: true,
+            json: async () => ({ choices: [{ finish_reason: 'stop', message: { content: '{}' } }] }),
+          };
+        },
+      })(context),
+      /区域名称无效/,
+    );
+    assert.equal(count, MAX_CORRECTIONS + 1);
+  }
+  // A transient HTTP failure is not a map mistake, so it gets one plain retry.
+  {
+    let count = 0;
+    await assert.rejects(
+      deepSeekGenerator({
+        key: 'test-only',
+        log() {},
+        fetchImpl: async () => {
+          count++;
+          return { ok: false, status: 503 };
+        },
+      })(context),
+      /HTTP 503/,
+    );
+    assert.equal(count, 2);
+  }
   for (const content of ['', '{', JSON.stringify({}), JSON.stringify(layout('s', 1, 0))]) {
     let count = 0;
     const generate = deepSeekGenerator({

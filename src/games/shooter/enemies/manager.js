@@ -122,6 +122,11 @@ export class EnemyManager {
       walk: 0,
       aimAmt: 0,
       flinch: 0,
+      // Hit lean in the enemy's local frame: back/side from the shot, twist from a slash.
+      hitBack: 0,
+      hitSide: 0,
+      hitTwist: 0,
+      hitHead: 0,
       flashT: 0,
       flashOn: false,
       path: null,
@@ -283,30 +288,65 @@ export class EnemyManager {
     }
     amount *= this.mods.damage;
     e.hp -= amount;
-    e.flinch = 1;
-    e.flashT = 0.07;
+    const dir = info.dir ? _d.copy(info.dir).normalize() : _d.set(0, 0.2, 1).normalize();
+    const blade = info.source === 'katana';
+    const blast = info.source === 'blast';
+    // Heavier hits (blade, headshot, big chunks of HP) read louder than light rifle ticks.
+    const power = clamp(
+      (amount / Math.max(20, e.maxHp * 0.28)) * (blade ? 1.45 : info.crit ? 1.25 : blast ? 1.15 : 1),
+      0.4,
+      1.7,
+    );
+    e.flinch = Math.max(e.flinch, Math.min(1.75, power));
+    e.flashT = blade ? 0.16 : info.crit ? 0.13 : 0.1;
     if (!e.flashOn) {
       setFill(e.mat, true);
       e.flashOn = true;
     }
-    const dir = info.dir || _d.set(0, 1, 0);
-    const amt = clamp(0.5 + amount / 70, 0.5, 2.2) * (e.T.boss ? 1.6 : 1);
-    this.ctx.effects.blood(info.point || e.center, dir, amt, {
-      ink: e.T.ink,
-    });
+    // Resolve the impact into the enemy's facing frame so the lean goes away from the blow.
+    const sy = Math.sin(e.yaw),
+      cy = Math.cos(e.yaw);
+    e.hitBack = clamp(-(dir.x * sy + dir.z * cy), -1, 1);
+    e.hitSide = clamp(-dir.x * cy + dir.z * sy, -1, 1);
+    e.hitTwist = info.slashDir ? clamp(info.slashDir, -1, 1) * power : e.hitSide * 0.55;
+    e.hitHead = info.crit || info.part === 'head' ? power : Math.max(0, e.hitHead * 0.35);
+    // A cut or a heavy shot shoves the body; bosses only flinch in place.
+    if (!e.T.boss) {
+      const kick = (blade ? 5.2 : info.crit ? 3.2 : blast ? 4 : 1.8) * power;
+      e.body.vel.x += dir.x * kick;
+      e.body.vel.z += dir.z * kick;
+      if (blade || blast) {
+        e.body.vel.y = Math.max(e.body.vel.y, (blade ? 3.2 : 2.2) * power);
+        e.body.onGround = false;
+      }
+      // A solid cut interrupts whatever swing they were winding up.
+      if (blade && e.attackT > 0) {
+        e.attackT = 0;
+        e.attackHit = true;
+      }
+    }
+    const hitAt = info.point || e.center;
+    const amt = clamp(0.55 + amount / 65, 0.55, 2.4) * (e.T.boss ? 1.6 : 1) * (blade ? 1.15 : 1);
+    this.ctx.effects.blood(hitAt, dir, amt, { ink: e.T.ink });
+    if (blade) {
+      this.ctx.effects.strokeBurst(hitAt, e.T.ink, 10, 9, { life: 0.22, size: 0.035 });
+      this.ctx.effects.sparks(hitAt, dir.clone().negate(), INK.ORANGE, 6, 10);
+    } else if (info.crit) this.ctx.effects.sparks(hitAt, dir.clone().negate(), INK.ORANGE, 5, 9);
     if (info.crit) audio.headshot(e.center);
     else audio.hitEnemy(e.center);
     this.ctx.hud.hitmarker(e.hp <= 0, info.crit);
-    if (info.source !== 'deflect') this.ctx.input.rumble(0.1, 0.3, 30);
+    if (info.source !== 'deflect')
+      this.ctx.input.rumble(blade ? 0.25 : 0.12, blade ? 0.55 : 0.3, blade ? 55 : 32);
+    if (blade || info.crit) this.ctx.effects.shakeAmt += blade ? 0.08 : 0.045;
     if (e.state === 'spawn') {
       e.state = 'hunt';
       e.root.scale.setScalar(e.T.scale);
     }
     if (e.T.boss && this.onBoss) this.onBoss(e);
     if (e.hp <= 0) {
-      this.ctx.game.hitstop(info.crit ? 0.05 : 0.025, 0.25);
+      this.ctx.game.hitstop(info.crit || blade ? 0.06 : 0.028, 0.28);
       this.kill(e, info);
-    }
+    } else if (blade || info.crit) this.ctx.game.hitstop(blade ? 0.04 : 0.02, 0.18);
   }
   _breakShield(e) {
     const g = e.J.shieldG;
@@ -479,7 +519,7 @@ export class EnemyManager {
           e.flashOn = false;
         }
       }
-      e.flinch = damp(e.flinch, 0, 9, dt);
+      e.flinch = damp(e.flinch, 0, 6.5, dt);
       if (e.state === 'spawn') {
         const f = clamp(e.t / 0.6, 0, 1);
         e.root.scale.setScalar(Math.max(0.001, f * e.T.scale * (1 + Math.sin(e.t * 60) * 0.12 * (1 - f))));
@@ -1324,8 +1364,13 @@ export class EnemyManager {
     J.wl.rotation.z = flap;
     J.wr.rotation.z = -flap;
     const roll = clamp(-(b.vel.x * Math.cos(e.yaw) - b.vel.z * Math.sin(e.yaw)) * 0.05, -0.8, 0.8);
-    J.body.rotation.z = damp(J.body.rotation.z, roll, 6, dt);
-    J.body.rotation.x = damp(J.body.rotation.x, clamp(-b.vel.y * 0.06, -0.6, 0.6), 6, dt);
+    J.body.rotation.z = damp(J.body.rotation.z, roll + e.flinch * (e.hitSide || 0) * 0.6, 6, dt);
+    J.body.rotation.x = damp(
+      J.body.rotation.x,
+      clamp(-b.vel.y * 0.06, -0.6, 0.6) + e.flinch * (0.35 + Math.max(0, e.hitBack || 0) * 0.4),
+      6,
+      dt,
+    );
     J.body.position.y = 0.6 + Math.sin(e.t * 3) * 0.1;
     if (e.flyState === 'stunned') J.body.rotation.z += dt * 12;
   }
@@ -1373,7 +1418,7 @@ export class EnemyManager {
       J.armL.rotation.x = s * 1.1 * w - wind * 0.5;
       J.armL.rotation.z = 0.35 * w;
       J.foreL.rotation.x = -0.6 * w;
-      J.torso.rotation.x = -0.3 * w + e.flinch * 0.35 - wind * 0.25 + strike * 0.55;
+      J.torso.rotation.x = -0.3 * w - wind * 0.25 + strike * 0.55;
       J.torso.rotation.y = wind * 0.5 - strike * 0.6;
     } else if (T.weapon === 'boss') {
       const a = e.bossAtk;
@@ -1392,9 +1437,9 @@ export class EnemyManager {
       J.armL.rotation.x = s * 0.6 * w - raise * 0.8;
       J.armL.rotation.z = 0.35;
       J.foreL.rotation.x = -0.5;
-      J.torso.rotation.x = -0.1 * w + e.flinch * 0.15 - raise * 0.3 + slam * 0.5;
+      J.torso.rotation.x = -0.1 * w - raise * 0.3 + slam * 0.5;
     } else {
-      J.armR.rotation.x = -s * 1.0 * w * (1 - aim) + (-1.35 + e.flinch * 0.35) * aim;
+      J.armR.rotation.x = -s * 1.0 * w * (1 - aim) + -1.35 * aim;
       J.armR.rotation.z = -0.25 * (1 - aim);
       J.foreR.rotation.x = -0.35 * (1 - aim) + -0.2 * aim;
       if (T.shield) {
@@ -1407,7 +1452,7 @@ export class EnemyManager {
         J.armL.rotation.z = 0.25 * (1 - aim);
         J.foreL.rotation.x = -0.4 * (1 - aim) + -0.5 * aim;
       }
-      J.torso.rotation.x = -0.22 * w + e.flinch * 0.4;
+      J.torso.rotation.x = -0.22 * w;
       J.torso.rotation.y = -0.35 * aim;
       J.torso.rotation.z = Math.sin(e.phase) * 0.05 * w;
     }
@@ -1417,6 +1462,30 @@ export class EnemyManager {
     J.headG.rotation.y = clamp(wrapAngle(yawTo - e.yaw) - (J.torso.rotation.y || 0), -1.1, 1.1);
     J.headG.rotation.x = clamp(-Math.atan2(_v.y, Math.hypot(_v.x, _v.z)), -0.6, 0.6) * 0.8;
     J.headG.rotation.z = Math.sin(e.phase * 0.5) * 0.06 * w;
+    // Overlay the hit: lean away from the blow, flail the arms, snap the head on a crit.
+    const f = e.flinch;
+    if (f > 0.03 && T.weapon !== 'bomb' && T.model !== 'blob') {
+      const back = e.hitBack || 0,
+        side = e.hitSide || 0,
+        twist = e.hitTwist || 0;
+      J.torso.rotation.x += f * (0.45 + Math.max(0, back) * 0.55);
+      J.torso.rotation.z += f * side * 0.7;
+      J.torso.rotation.y = (J.torso.rotation.y || 0) + f * twist * 0.85;
+      J.armL.rotation.x -= f * (0.85 + Math.max(0, -side) * 0.4);
+      J.armR.rotation.x -= f * (0.7 + Math.max(0, side) * 0.4);
+      J.armL.rotation.z = (J.armL.rotation.z || 0) + f * (0.45 - side * 0.25);
+      J.armR.rotation.z = (J.armR.rotation.z || 0) - f * (0.4 + side * 0.25);
+      J.foreL.rotation.x -= f * 0.35;
+      J.foreR.rotation.x -= f * 0.3;
+      J.headG.rotation.x -= f * (0.25 + e.hitHead * 0.7);
+      J.headG.rotation.z += f * side * 0.55;
+      J.headG.rotation.y += f * twist * 0.35;
+      J.hips.position.y -= f * 0.1;
+      if (!b.onGround) {
+        J.legL.rotation.x -= f * 0.25;
+        J.legR.rotation.x += f * 0.2;
+      }
+    }
     if (e.state === 'stunned') {
       J.torso.rotation.x = 0.6;
       J.armL.rotation.x = -2.5;

@@ -13,11 +13,11 @@ building({ x, z, w, d, h, archetype, ink = INK.BLUE, seed = 'level' }) → { roo
 you get a solid volume with a coloured roof cap, window bays on all four elevations and
 a parapet above 10 m. Named archetypes and their minimum footprints:
 
-| archetype   | minimum | what it is                                                                                                   |
-| ----------- | ------- | ------------------------------------------------------------------------------------------------------------ |
-| `tower`     | 8×8×12  | floor plates every `h/floors` with pillars and no outside walls; climb it level by level                     |
-| `warehouse` | 12×12×8 | shell walls with a door and clerestory windows, a catwalk ring reached by one flight, a skylight in the roof |
-| `courtyard` | 16×16×4 | a 3 m-thick wall ring with a gate, an open yard, and a walkable loop along the wall tops                     |
+| archetype   | minimum | what it is                                                                                                                           |
+| ----------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `tower`     | 8×8×12  | floor plates every `h/floors` with pillars and no outside walls; climb it level by level                                             |
+| `warehouse` | 12×12×8 | shell walls with a door and clerestory windows, a catwalk ring reached by one flight, a skylight in the roof                         |
+| `courtyard` | 12×12×4 | a wall ring with a gate, an open yard, and a walkable loop along the wall tops; walls are 3 m thick from 16 m across, 2 m below that |
 
 The returned `roof` is the anchor to hand to `skybridge` or to place anything on top.
 `seed` only drives the crate scatter inside `warehouse` and `courtyard`, so revisiting

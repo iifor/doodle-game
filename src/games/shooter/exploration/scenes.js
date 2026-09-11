@@ -80,7 +80,7 @@ export class BuildingScenes {
     this.jobs.set(b.id, promise);
     return promise;
   }
-  request(reset = false) {
+  request(reset = false, confirmEnding = false) {
     const s = this.s;
     if (s.isHost) Object.assign(s.players.get(s.selfId), s.packLocal());
     const p = s.players.get(s.selfId);
@@ -92,7 +92,7 @@ export class BuildingScenes {
       return;
     }
     if (this.dynamic && !reset && this.near(p)) this.waitingUntil = Date.now() + 150000;
-    const payload = { epoch: p.epoch, reset, seq: ++this.requestSerial };
+    const payload = { epoch: p.epoch, reset, seq: ++this.requestSerial, confirmEnding };
     if (this.dynamic) this.waitingSeq = payload.seq;
     if (s.isHost)
       void this.interact(p, payload)
@@ -113,10 +113,14 @@ export class BuildingScenes {
     p.interactionSeq = data.seq;
     const portal = this.near(p);
     if (!portal) {
-      if (!data.reset && this.atSupply(p) && Date.now() - (p.supplyAt ?? 0) >= 10000) {
-        p.supplyAt = Date.now();
-        p.reward++;
-        p.grenades = Math.min(5, p.grenades + 1);
+      if (!data.reset && this.atSupply(p)) {
+        const confirm = !!data.confirmEnding;
+        if (s.isHost) s.talkCamp(confirm);
+        if (!confirm && Date.now() - (p.supplyAt ?? 0) >= 10000) {
+          p.supplyAt = Date.now();
+          p.reward++;
+          p.grenades = Math.min(5, p.grenades + 1);
+        }
       }
       return;
     }
@@ -354,7 +358,9 @@ export class BuildingScenes {
       if (!busy) this.waitingUntil = 0;
       this.hint = near
         ? `${near.building.title} · E ${self.sceneId === 'outdoor' ? '进入' : '返回街道'}`
-        : '';
+        : this.atSupply(self)
+          ? 'E 营地补给 · 听委托'
+          : '';
       if (this.failed.has(near?.building.id)) this.hint += '\n上次生成失败 · E 重试';
       if (s.loading) {
         s.loading.hidden = !busy;
@@ -362,7 +368,10 @@ export class BuildingScenes {
           self?.sceneId === 'outdoor' ? '正在准备房间、窗户与楼梯…' : '正在返回街道…';
       }
       if (busy) this.hint = '正在打开建筑 · E 取消进入 · 移开可取消；已完成的生成仍会保存';
-      if (s.ctx.game.state === 'play' && s.ctx.input.pressed('interact')) this.request();
+      if (s.ctx.game.state === 'play') {
+        if (s.ctx.input.pressed('interact')) this.request();
+        if (s.ctx.input.pressed('talk') && this.atSupply(self)) this.request(false, true);
+      }
       return;
     }
     for (const p of s.players.values()) {
@@ -379,11 +388,12 @@ export class BuildingScenes {
     this.hint = near
       ? `${near.building.title} · E ${self.sceneId === 'outdoor' ? '进入' : '返回街道'}${near.building.templateId === 'warehouse' && self.sceneId === 'outdoor' ? ' · N 重置挑战' : ''}`
       : this.atSupply(self)
-        ? 'E 营地补给（每10秒可补充一次） · 沿道路探索街坊'
+        ? 'E 营地补给 · 听委托 · T 确认处置'
         : '';
     if (self.transition || this.jobs.size || this.prepared) this.hint += '\n正在准备室内，可继续探索街道…';
     if (s.ctx.game.state === 'play') {
       if (s.ctx.input.pressed('interact')) this.request();
+      if (s.ctx.input.pressed('talk') && this.atSupply(self)) this.request(false, true);
       if (s.ctx.input.pressed('resetRun')) this.request(true);
     }
   }

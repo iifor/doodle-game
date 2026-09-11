@@ -225,7 +225,8 @@ export function createParts(b) {
   // A walled compound: a thick ring you can walk along the top of, one gate through
   // the front, and an open yard with cover in it.
   const courtyard = ({ x, z, w, d, h, ink, seed }) => {
-    const t = 3;
+    // Thinner walls on a small compound, so the yard inside stays worth entering.
+    const t = Math.min(w, d) >= 16 ? 3 : 2;
     const x1 = x - w / 2,
       x2 = x + w / 2,
       z1 = z - d / 2,

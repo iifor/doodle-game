@@ -5,9 +5,10 @@ import * as THREE from 'three';
 import { Transport } from '../online/transport.js';
 import { RemotePlayer, encodeLocal } from '../online/remote-player.js';
 import { validateName } from '../online/protocol.js';
-import { INK } from '../render.js';
+import { INK, setFill } from '../render.js';
 import { SEE_THROUGH, makeBody } from '../physics.js';
 import { disposeTree } from '../../../shared/resources.js';
+import { damp } from '../util.js';
 import { Chunks } from './chunks.js';
 import {
   SIZE,
@@ -29,6 +30,16 @@ import { GUNS } from '../weapons/guns.js';
 import { TYPES } from '../enemies/types.js';
 import { allocateInk, inkCSS } from '../colors.js';
 import { WorldAPI, Packets, validateActor } from './network.js';
+import {
+  QUESTS,
+  defaultQuests,
+  validateQuests,
+  questBrief,
+  onClear,
+  onBossKill,
+  onCampInteract,
+  startQuest,
+} from './quests.js';
 
 const nearby = (a, b, radius = 1) => Math.abs(a.cx - b.cx) <= radius && Math.abs(a.cz - b.cz) <= radius;
 const freshProgress = () => ({ defeated: [], rewarded: false });
@@ -538,6 +549,86 @@ export class Exploration {
     else this.packets.post(this.net.connections.keys().next().value, 'ready', {});
     this.overlay.hidden = false;
     if (!this.overlay.parentElement) this.ctx.input.canvas?.parentElement?.append(this.overlay);
+    if (this.isHost) this.bootstrapQuests();
+  }
+  questsState() {
+    if (!this.progress) return defaultQuests();
+    if (!this.progress.quests) this.progress.quests = defaultQuests();
+    return this.progress.quests;
+  }
+  commitQuests(result) {
+    if (!result?.quests || !this.isHost) return;
+    const tip = result.tip;
+    const next = validateQuests(result.quests);
+    const changed = JSON.stringify(this.progress.quests ?? null) !== JSON.stringify(next);
+    if (changed) this.progress.quests = next;
+    if (changed && this.info?.id && this.api) {
+      void this.save(
+        () => ({ quests: next }),
+        () => {
+          if (tip) this.ctx.hud.tip(tip, 5);
+        },
+      );
+    } else if (tip) this.ctx.hud.tip(tip, 5);
+  }
+  bootstrapQuests() {
+    const q = this.questsState();
+    if (q.active || q.completed.length) return;
+    this.commitQuests({ quests: startQuest(q, 'Q0', this.progress), tip: QUESTS.Q0.brief });
+  }
+  talkCamp(confirmEnding = false) {
+    if (!this.isHost) return;
+    this.commitQuests(onCampInteract(this.questsState(), this.progress, { confirmEnding }));
+  }
+  advanceQuestAfterClear(warehouse) {
+    const q = this.questsState();
+    const rooftop = q.active === 'Q5' && (q.flags.roofTouch || (this.ctx.player.body?.pos.y ?? 0) > 5);
+    let result;
+    if (q.active === 'Q2' && (warehouse || this.info?.schemaVersion === 1))
+      result = onClear(q, this.progress, { warehouse: true });
+    else if (q.active === 'Q5') result = onClear(q, this.progress, { rooftop });
+    else result = onClear(q, this.progress, { warehouse });
+    this.commitQuests(result);
+  }
+  spawnQuestBoss() {
+    if (!this.isHost || !this.chunks) return;
+    const q = this.questsState();
+    const def = QUESTS[q.active];
+    if (def?.kind !== 'boss' || q.flags.bossSpawned) return;
+    const self = this.players.get(this.selfId);
+    if (!self?.active || self.hp <= 0 || self.sceneId !== 'outdoor') return;
+    const key = keyOf(self.pos.cx, self.pos.cz);
+    if (key === '0,0') return;
+    const item = this.chunks.loaded.get(key);
+    if (!item?.block.layout.outpost) return;
+    const id = `quest:${q.active}`;
+    if (this.ctx.enemies.byId.has(id)) return;
+    const [x, z] = item.block.layout.outpost.center;
+    const e = this.ctx.enemies.spawn(
+      def.boss,
+      this.chunks.position({ cx: item.x, cz: item.z, x, y: 0, z }),
+      id,
+    );
+    e.chunk = key;
+    e.sceneId = 'outdoor';
+    e.questBoss = true;
+    q.flags.bossSpawned = true;
+    q.flags.targetChunk = key;
+    this.commitQuests({
+      quests: validateQuests({ ...q, flags: { ...q.flags } }),
+    });
+  }
+  tickQuestBoss() {
+    const q = this.questsState();
+    const boss = [...this.ctx.enemies.byId.values()].find((e) => e.questBoss && e.alive);
+    if (boss) this.ctx.hud.setBoss(boss.T.name, boss.hp / boss.maxHp);
+    else if (QUESTS[q.active]?.kind === 'boss') this.ctx.hud.setBoss(null, null);
+    if (q.active === 'Q5' && (this.ctx.player.body?.pos.y ?? 0) > 5) q.flags.roofTouch = true;
+    if (q.active !== 'Q3' || q.flags.bossFled) return;
+    const e = this.ctx.enemies.byId.get('quest:Q3');
+    if (!e?.alive || e.hp > e.maxHp * 0.45) return;
+    e.questFlee = true;
+    this.ctx.enemies.kill(e, { source: 'quest-flee', dir: new THREE.Vector3(0, 1, 0) });
   }
   async load(x, z, generate = false) {
     const key = coordinates(x, z);
@@ -762,7 +853,14 @@ export class Exploration {
     }
   }
   killed(enemy) {
-    if (!this.isHost || !enemy.chunk) return;
+    if (!this.isHost) return;
+    if (enemy.questBoss) {
+      const fled = !!enemy.questFlee && !this.questsState().flags.bossFled;
+      this.commitQuests(onBossKill(this.questsState(), this.progress, fled));
+      this.ctx.hud.setBoss(null, null);
+      return;
+    }
+    if (!enemy.chunk) return;
     if (enemy.runId && this.stateFor(enemy.chunk).runId !== enemy.runId) return;
     const pending = this.pendingKills.get(enemy.chunk) ?? new Set();
     pending.add(enemy.spawnIndex);
@@ -797,6 +895,7 @@ export class Exploration {
             enemy.runId ? '仓库挑战完成并保存 · 奖励已领取' : '据点已清理并保存 · 安全复活点已解锁',
             4,
           );
+          this.advanceQuestAfterClear(!!enemy.runId);
         }
       },
     );
@@ -1234,6 +1333,18 @@ export class Exploration {
       present.add(v.id);
       let e = this.ctx.enemies.byId.get(v.id);
       if (!e) e = this.ctx.enemies.spawn(v.type, this.chunks.position(v.pos), v.id);
+      // Guests only see HP in the snapshot; a drop is the cue to play a local hit react.
+      if (e.alive && v.hp < e.hp - 0.01) {
+        e.flinch = Math.max(e.flinch, 1);
+        e.flashT = 0.1;
+        if (!e.flashOn) {
+          setFill(e.mat, true);
+          e.flashOn = true;
+        }
+        e.hitBack = 0.7;
+        e.hitSide = (Math.random() - 0.5) * 1.2;
+        e.hitTwist = e.hitSide * 0.5;
+      }
       e.body.vel.copy(this.chunks.position(v.pos).sub(e.body.pos)).multiplyScalar(5);
       e.body.pos.copy(this.chunks.position(v.pos));
       e.yaw = v.yaw;
@@ -1296,6 +1407,14 @@ export class Exploration {
   animateEnemies(dt) {
     for (const e of this.ctx.enemies.enemies) {
       e.t += dt;
+      if (e.flashT > 0) {
+        e.flashT -= dt;
+        if (e.flashT <= 0 && e.flashOn) {
+          setFill(e.mat, false);
+          e.flashOn = false;
+        }
+      }
+      e.flinch = damp(e.flinch, 0, 6.5, dt);
       e.root.position.copy(e.body.pos);
       e.root.rotation.y = e.yaw;
       this.ctx.enemies._animate(e, dt, this.ctx.player.center);
@@ -1386,6 +1505,8 @@ export class Exploration {
       for (const g of this.grenades) g.pos.sub(shift);
       if (this.isHost) {
         this.spawnOutposts();
+        this.spawnQuestBoss();
+        this.tickQuestBoss();
         this.updateGrenades(dt);
         for (const p of this.players.values()) {
           if (p.respawnAt !== null && p.respawnAt <= this.ctx.game.time) this.respawn(p);
@@ -1429,7 +1550,8 @@ export class Exploration {
         this.chunks.loaded.get(this.info.schemaVersion === 1 ? dynamicScene(p) : key) ??
         this.chunks.loaded.get(key);
     const state = this.stateFor(key);
-    this.label.textContent = `${item?.block.layout.name ?? '探索边界'} · ${item?.block.layout.interior ? `室内${item.block.layout.outpost ? ` · 第 ${state.runId} 轮` : ''}` : key}\n${key === '0,0' ? '安全营地' : item?.block.layout.interior && !item.block.layout.outpost ? '安全建筑' : outpostComplete(state) ? '据点已清理' : `据点 ${state?.defeated.length ?? 0}/${item?.block.layout.outpost?.spawns.length ?? state?.total ?? 4}`} · ${this.unsaved.length || this.hostStatus?.unsaved ? '未保存，请打开菜单重试' : this.saving || this.hostStatus?.saving ? '正在保存' : '已保存'}${this.requests.size || this.hostStatus?.generating ? '\n前方区域正在绘制…' : ''}${this.error ? `\n${this.error}` : ''}${this.scenes?.hint ? `\n${this.scenes.hint}` : ''}`;
+    const brief = questBrief(this.questsState());
+    this.label.textContent = `${item?.block.layout.name ?? '探索边界'} · ${item?.block.layout.interior ? `室内${item.block.layout.outpost ? ` · 第 ${state.runId} 轮` : ''}` : key}\n${key === '0,0' ? '安全营地' : item?.block.layout.interior && !item.block.layout.outpost ? '安全建筑' : outpostComplete(state) ? '据点已清理' : `据点 ${state?.defeated.length ?? 0}/${item?.block.layout.outpost?.spawns.length ?? state?.total ?? 4}`} · ${this.unsaved.length || this.hostStatus?.unsaved ? '未保存，请打开菜单重试' : this.saving || this.hostStatus?.saving ? '正在保存' : '已保存'}${this.requests.size || this.hostStatus?.generating ? '\n前方区域正在绘制…' : ''}${this.error ? `\n${this.error}` : ''}${this.scenes?.hint ? `\n${this.scenes.hint}` : ''}${brief ? `\n委托 · ${brief}` : ''}`;
     const c = this.map.getContext('2d');
     if (this.info.schemaVersion === 2) {
       c.fillStyle = '#fffdf2';

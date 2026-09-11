@@ -50,7 +50,7 @@ node --env-file=.env.local server/world-server.js
 | `WORLD_DATA_DIR`   | 当前目录下的 `world-data` | 持久存档目录，可设置绝对路径 |
 | `WORLD_PORT`       | `8787`                    | 本机服务端口                 |
 
-接口固定使用 `https://api.deepseek.com/chat/completions`，关闭思考模式，启用 `json_object`，提示提供 JSON 示例。依据 [Chat Completions 文档](https://api-docs.deepseek.com/api/create-chat-completion/)、[JSON 输出文档](https://api-docs.deepseek.com/guides/json_mode/)和[思考模式文档](https://api-docs.deepseek.com/guides/thinking_mode/)。返回内容仍须经过地图校验。每次请求超时 60 秒，暂时错误或地图错误最多重试一次；401、402 不重试。终端记录耗时、错误和 token 使用量。
+接口固定使用 `https://api.deepseek.com/chat/completions`，关闭思考模式，启用 `json_object`，提示提供 JSON 示例。依据 [Chat Completions 文档](https://api-docs.deepseek.com/api/create-chat-completion/)、[JSON 输出文档](https://api-docs.deepseek.com/guides/json_mode/)和[思考模式文档](https://api-docs.deepseek.com/guides/thinking_mode/)。返回内容仍须经过地图校验。每次请求超时 60 秒，暂时的传输错误最多重试一次；地图校验失败改为最多三轮纠错，因为校验器每次只报告第一个问题，一份有多处错误的布局需要多轮才能收敛；401、402 不重试。终端记录耗时、错误和 token 使用量。
 
 ## 持续探索（默认）
 
@@ -73,7 +73,7 @@ node --env-file=.env.local server/world-server.js
 
 - `tower`：开放框架楼，每层只有楼板和柱子、没有外墙，可以从地面一层层往上打。至少 8×8 米、高 12 米。
 - `warehouse`：能走进去打的厂房，外墙带门洞和高窗，内部一圈马道由一段楼梯连上去，屋顶中央开天窗。至少 12×12 米、高 8 米。
-- `courtyard`：院落，三米厚围墙围出中庭，正面留一个门洞，墙顶是一圈可以走的回廊。至少 16×16 米、高 4 米。
+- `courtyard`：院落，厚围墙围出中庭，正面留一个门洞，墙顶是一圈可以走的回廊。至少 12×12 米、高 4 米；短边不足 16 米时墙厚从 3 米降到 2 米，保证中庭还值得进去。
 
 几何由 `src/games/shooter/levels/parts.js` 的部件层生成。部件只用 `builder.js` 的图元，吃参数对象、返回锚点，手工关卡和 AI 区块共用同一份实现；形制的最小尺寸表定义在 `schema.js`，校验器和构建器读的是同一份数字，所以能通过校验的布局一定搭得出来。
 
@@ -160,7 +160,7 @@ V1 的共享边界出口由种子和边界坐标决定，保留原有字段、�
 node --env-file=.env.local scripts/check-world-live.js
 ```
 
-此命令会产生真实模型调用费用，最多生成 3 个新区块，每块仍最多自动重试一次；不会加入常规 `npm run check`。测试使用独立存档目录，输出生成耗时、用量、失败原因，并验证请求去重、道路通行和重启读取。报告与模型地图 JSON 保存在输出的 `world-data/live-check-*` 目录中，不包含密钥。
+此命令会产生真实模型调用费用，最多生成 3 个新区块，每块最多三轮纠错；不会加入常规 `npm run check`。测试使用独立存档目录，输出生成耗时、用量、失败原因，并验证请求去重、道路通行和重启读取。报告与模型地图 JSON 保存在输出的 `world-data/live-check-*` 目录中，不包含密钥。
 
 ### V2 真实生成复测
 
@@ -168,6 +168,6 @@ node --env-file=.env.local scripts/check-world-live.js
 node --env-file=.env.local scripts/check-region-live.js
 ```
 
-此命令会产生真实模型费用：一份主题、四个户外区块和七个室内，共 12 项生成，每项最多自动重试一次。使用独立的 `world-data/region-live-*` 目录，验证 HTTP 接口、并发去重、完整性、实际导航、挑战重置和重新读取存档。报告保存目录、世界编号、耗时、token 用量和模型输出，不保存密钥。正常创建世界会按需生成，不会一次生成全部室内。
+此命令会产生真实模型费用：一份主题、四个户外区块和七个室内，共 12 项生成，每项最多三轮纠错。使用独立的 `world-data/region-live-*` 目录，验证 HTTP 接口、并发去重、完整性、实际导航、挑战重置和重新读取存档。报告保存目录、世界编号、耗时、token 用量和模型输出，不保存密钥。正常创建世界会按需生成，不会一次生成全部室内。
 
 2026-09-08：本次完整生成验证通过，12 项生成共 6287 tokens；此前提示结构修正前的失败验证另消耗 962 tokens。普通 Chrome 双客户端连接成功并补齐四区地图；自动化环境仍拒绝鼠标锁定（WrongDocumentError），因此实际键鼠战斗和连续进出建筑尚未取得浏览器实机通过证据。未绕过浏览器权限，也未用手机控制替代。

@@ -203,7 +203,11 @@ export function mountShooter(canvas, root, onMenu, touchRoot, options = {}) {
         }
         audio.init();
         const locked = input.device !== 'mouse' || (await input.requestLock());
-        if (!locked || !running) return;
+        if (!running) return;
+        if (!locked) {
+          if (!options.explore) return;
+          hud.tip('鼠标捕获失败，仍可继续探索；点击画面可重试捕获。', 4);
+        }
         await audio.resume();
         if (!running) return;
         if (document.hidden || (input.device === 'touch' && canvas.clientWidth <= canvas.clientHeight)) {

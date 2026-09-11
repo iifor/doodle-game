@@ -41,6 +41,7 @@ import {
   EXAMPLE_NAME,
   hash,
 } from '../src/games/shooter/exploration/schema.js';
+import { defaultQuests, validateQuests } from '../src/games/shooter/exploration/quests.js';
 
 export async function atomicWrite(file, data) {
   await mkdir(join(file, '..'), { recursive: true });
@@ -160,6 +161,7 @@ export class WorldStore {
       ...(version === 2 ? { runs: {} } : {}),
       safePosition: { cx: 0, cz: 0, x: 64, y: 0, z: 64 },
       generationPaused: false,
+      quests: defaultQuests(),
     });
     await atomicWrite(this.path(id, 'world.json'), info);
     return info;
@@ -219,6 +221,8 @@ export class WorldStore {
         );
       }
     }
+    if (p.quests !== undefined) p.quests = validateQuests(p.quests);
+    else p.quests = defaultQuests();
     return p;
   }
   async manifest(id) {
@@ -559,6 +563,7 @@ export class WorldStore {
           requireWorld(typeof patch.generationPaused === 'boolean', '生成开关无效');
           p.generationPaused = patch.generationPaused;
         }
+        if (patch.quests !== undefined) p.quests = validateQuests(patch.quests);
         p.revision++;
         await atomicWrite(this.path(id, 'progress.json'), p);
         return p;
@@ -570,6 +575,8 @@ export class WorldStore {
   }
 }
 
+// How many rounds of map correction a single region may use before it is given up on.
+export const MAX_CORRECTIONS = 3;
 export function deepSeekGenerator({
   fetchImpl = fetch,
   key = process.env.DEEPSEEK_API_KEY,
@@ -609,7 +616,8 @@ export function deepSeekGenerator({
     };
     const offset = (a, b) => (hash(`${seed}:plot:${x}:${z}:${a}:${b}`) % 9) - 4;
     let correction = '';
-    for (let attempt = 0; attempt < 2; attempt++) {
+    const reported = [];
+    for (let attempt = 0; ; attempt++) {
       const start = Date.now();
       let output = '';
       try {
@@ -618,7 +626,7 @@ export function deepSeekGenerator({
               {
                 role: 'system',
                 content:
-                  '你是涂鸦游戏场景设计师，只返回完整 JSON。输出必须使用example的对象结构和英文键名，不要添加theme、result、data、example等包装层。example表示输出结构，context是只读背景。名称使用有特色的中文，不要照抄例子。name最多30字符，sign最多24字符，background最多500字符，style最多300字符。修正correction中指出的错误后仍输出完整对象。' +
+                  '你是涂鸦游戏场景设计师，只返回完整 JSON。输出必须使用example的对象结构和英文键名，不要添加theme、result、data、example等包装层。example表示输出结构，context是只读背景。名称使用有特色的中文，不要照抄例子。name最多30字符，sign最多24字符，background最多500字符，style最多300字符。修正correction中指出的错误后仍输出完整对象；correction.previousErrors是前几轮已报过的错误，不要重新引入。' +
                   (design.kind === 'house'
                     ? '本次设计可探索的住宅室内。顶层只有name、palette、width、depth、corridor、floors。palette为blue/green/orange；width只能20/24/28，depth只能24/28/32。corridor决定走廊形式：centre为居中走廊、两侧都有房间；left或right表示走廊贴着该侧外墙，那一侧必须是空数组，另一侧房间进深加倍。请在两种形式之间自由选择，不要每栋都用centre。自主决定一至三层，floors每项有left和right数组；有房间的一侧一至三个房间。房间只有type、window布尔值、connecting布尔值。type只能living/kitchen/bedroom/bathroom/study/storage/dining。一层必须有客厅living和厨房kitchen。window决定该房间是否有外窗，connecting决定是否有通往同侧下一个房间的门。逐层改变用途、房间数量与窗户，不要照抄示例，也不要每层完全相同。引擎负责走廊、门洞、楼板、连续楼梯和家具摆放，禁止输出坐标或可执行代码。'
                     : design.kind === 'theme'
@@ -630,11 +638,53 @@ export function deepSeekGenerator({
           : [
               {
                 role: 'system',
-                content:
-                  '你是涂鸦城镇关卡设计师。只输出 JSON。区域128米见方，平地y=0。结构：{"name":"区域名","roads":[[x1,z1,x2,z2]],"buildings":[{"x":20,"z":20,"w":12,"d":12,"h":8},{"x":44,"z":44,"w":16,"d":16,"h":10,"archetype":"courtyard"}],"cover":[{"x":40,"z":20,"w":2,"d":2,"h":1}],"structures":[{"type":"stair","building":0,"face":"north"},{"type":"bridge","from":0,"to":1}],"landmark":[64,64],"supply":[68,68],"outpost":{"center":[64,64],"spawns":[[52,52],[76,52],[52,76],[76,76]]}}。道路宽8米，轴对齐，必须连接给定四个出口且互通；可以用折线路段连接。道路1–24段，建筑不超过32个高度3–18米，掩体不超过32个高度0.7–2米。建筑和掩体的x,z是矩形中心坐标，不是左下角；w,d是完整宽深，h为高度。必须满足x-w/2>=8、x+w/2<=120、z-d/2>=8、z+d/2<=120。必须放4–8栋建筑和2–4个掩体，不得返回空建筑数组。营地区块[0,0]的outpost必须为null，其他区块必须包含四个敌人出生点。name必须自拟一个有特色的中文街区名，禁止输出reference或结构示例中的name。提供的reference是已可行的道路和出生点布局，建议保留其roads并从空地选择建筑；不要把建筑移到道路上。组件相互至少间隔1米，建筑外缘与道路中线至少相隔4米，任何地标、补给、出生点周围留出1.2米空间。所有点坐标在[4,124]内。地标为地面标志，不能被建筑遮挡。四个敌人出生点相距至少2.5米。' +
-                  'structures是可选的附属结构，最多8个，只有stair和bridge两种，引擎按固定尺寸搭建，禁止输出坐标。stair在建筑某一面外侧搭一段直达屋顶的折返楼梯：building是buildings下标，face取north/south/east/west；该立面长度必须至少11米（north/south看w，east/west看d），楼梯向外占4.4米，不能压到道路、其它建筑或掩体。bridge在两栋屋顶之间架一条天桥：只有from和to两个字段，是两栋不同建筑的下标，桥面高度由引擎取较矮屋顶并自动补上通往较高屋顶的台阶，不要输出高度。两栋在横向重合至少3.4米，相对立面间距4–30米，两栋屋顶高差不超过4米（有高差时间距还需至少9米），中间不能夹着更高的第三栋。每个区块建议放1–2段楼梯和1–2座天桥，让屋顶成为可以上去的第二层战场，楼梯尽量选朝向空地、立面较长的高建筑。' +
-                  'buildings每项可以另加一个archetype字段决定楼体形制，省略就是普通实心方楼。tower是开放框架楼：每层只有楼板和柱子、没有外墙，从地面一层层往上打，至少8×8米且高12米。warehouse是能走进去打的厂房：外墙带门洞和高窗，内部一圈马道由一段楼梯连上去，屋顶中央开天窗，至少12×12米且高8米。courtyard是院落：三米厚围墙围出中庭，正面留一个门洞，墙顶是一圈可以走的回廊，至少16×16米且高4米。这三种本身就是可进入的战斗空间，引擎不会再给它们加“E进入住宅”的门。每个区块用1–2栋形制建筑当视觉锚点、其余保持普通方楼即可，形制建筑一样可以挂stair和bridge。' +
-                  '追求街区之间有辨识度：不要把建筑排成整齐网格，在suggestedPlots附近自由偏移；从suggestedSizes里挑不同的宽深组合，混用狭长和方正的体块；至少两栋高度不低于12米，与低矮建筑拉开屋顶落差，形成广场、街巷和可攀爬的轮廓。若提供correction，则根据其中error修改previousOutput的错误，仍输出完整JSON，不要重复无效布局。',
+                // Sectioned rather than one paragraph: 36 rules run together made the
+                // model drop whichever one it had read earliest.
+                content: [
+                  '你是涂鸦城镇关卡设计师。只输出 JSON，不要输出解释或代码块。区域128米见方，平地y=0。',
+                  '',
+                  '【输出结构】',
+                  '{"name":"区域名","roads":[[x1,z1,x2,z2]],"buildings":[{"x":20,"z":20,"w":12,"d":12,"h":8},{"x":44,"z":44,"w":16,"d":16,"h":10,"archetype":"courtyard"}],"cover":[{"x":40,"z":20,"w":2,"d":2,"h":1}],"structures":[{"type":"stair","building":0,"face":"north"},{"type":"bridge","from":0,"to":1}],"landmark":[64,64],"supply":[68,68],"outpost":{"center":[64,64],"spawns":[[52,52],[76,52],[52,76],[76,76]]}}',
+                  '',
+                  '【必须满足，缺一项整份作废】',
+                  '1. buildings 放4–8栋，cover 放2–4个，都不能是空数组。',
+                  '2. outpost：本次区块坐标是[0,0]时必须为null；不是[0,0]时必须给出center和恰好4个spawns，四个出生点相互至少相距2.5米。reference里已经按本区块给好了可用的outpost，照它填即可。',
+                  '3. name 自拟一个有特色的中文街区名，不得输出reference或示例里的name。',
+                  '4. roads 必须连接给定的四个exits且整网互通。建议直接沿用reference的roads。',
+                  '',
+                  '【坐标与尺寸】',
+                  '- buildings 和 cover 的 x,z 是矩形中心、不是左下角；w,d 是完整宽深，h 是高度。',
+                  '- 中心 x,z 都必须在 10–118；w,d 在 1–24；建筑 h 在 3–18，掩体 h 在 0.7–2。',
+                  '- 四条边缘必须落在区块内：x-w/2>=8、x+w/2<=120、z-d/2>=8、z+d/2<=120。',
+                  '- landmark、supply、outpost 的所有点坐标都在 4–124 内。',
+                  '',
+                  '【留空规则】',
+                  '- 任意两个组件外缘至少间隔1米。',
+                  '- 道路宽8米、轴对齐。建筑和掩体都不能压到路面：任何一个的外缘与每条道路中线至少相隔4米，只有2米见方的掩体也不例外，请放到路边空地。',
+                  '- landmark、supply 和每个出生点周围留出1.2米。landmark 是地面标志，不能被建筑遮挡。',
+                  '- reference 里的 cover 位置只是示例，换了建筑布局后必须重新为掩体选位，不要照抄。',
+                  '',
+                  '【archetype：楼体形制，可选】',
+                  '- 省略就是普通实心方楼。这三种本身就是可进入的战斗空间，引擎不会再给它们加“E进入住宅”的门。',
+                  '- tower 开放框架楼：每层只有楼板和柱子、没有外墙，可以从地面一层层往上打。至少8×8米且高12米。',
+                  '- warehouse 厂房：外墙带门洞和高窗，内部一圈马道由一段楼梯连上去，屋顶中央开天窗。至少12×12米且高8米。',
+                  '- courtyard 院落：厚围墙围出中庭，正面留一个门洞，墙顶是一圈可以走的回廊。至少12×12米且高4米。',
+                  '- 每个区块用1–2栋形制建筑当视觉锚点，其余保持普通方楼；形制建筑一样可以挂 stair 和 bridge。',
+                  '',
+                  '【structures：屋顶通路，可选，最多8个】',
+                  '- 只有 stair 和 bridge 两种，引擎按固定尺寸搭建，禁止输出坐标或高度。每区块建议1–2段楼梯和1–2座天桥，让屋顶成为第二层战场。',
+                  '- stair 在建筑某一面外侧搭折返楼梯直达屋顶：building 是 buildings 下标，face 取 north/south/east/west。该立面长度至少11米（north/south 看 w，east/west 看 d），楼梯向外占4.4米，不能压到道路、其它建筑或掩体。优先选朝向空地、立面较长的高建筑。',
+                  '- bridge 只有 from 和 to 两个字段，是两栋不同建筑的下标。只在彼此相邻的两栋之间架桥：先按坐标找出中心相距不超过35米的一对，再按顺序核对三条：两栋 h 相差不超过4米；若两栋 x 之差大于 z 之差则桥沿 x 架设、要比较两栋 z 区间的重合长度，否则沿 z 架设、比较 x 区间的重合长度，重合至少3.4米；两栋相对立面之间的净距在4–30米。任意一条不满足就换一对建筑或改放 stair。',
+                  '',
+                  '【风格】',
+                  '- 不要把建筑排成整齐网格：在 suggestedPlots 附近自由偏移，从 suggestedSizes 里挑不同的宽深组合，混用狭长和方正的体块。',
+                  '- 至少两栋高度不低于12米，与低矮建筑拉开屋顶落差，形成广场、街巷和可攀爬的轮廓。',
+                  '',
+                  '【纠错】',
+                  '- 收到 correction 时，按其中 error 修改 previousOutput 并仍输出完整 JSON，不要重复无效布局。',
+                  '- correction.previousErrors 是前几轮已报过的错误，修正当前 error 时不要把它们重新引入。',
+                  '- 校验器每次只报告遇到的第一个错误，所以改完之后请把上面每一节再核对一遍，一次性交出干净的布局。',
+                ].join('\n'),
               },
               {
                 role: 'user',
@@ -702,7 +752,14 @@ export function deepSeekGenerator({
           '模型输出为空或已截断',
         );
         const parsed = JSON.parse(body.choices[0].message.content);
-        return design ? validate(parsed) : validateGeneratedLayout(parsed, seed, x, z);
+        try {
+          return design ? validate(parsed) : validateGeneratedLayout(parsed, seed, x, z);
+        } catch (error) {
+          // A well-formed answer that breaks a map rule: the kind of mistake the model
+          // can be told about and fix, unlike a truncated or unparseable one.
+          error.layout = true;
+          throw error;
+        }
       } catch (error) {
         log(
           JSON.stringify({
@@ -714,8 +771,18 @@ export function deepSeekGenerator({
             error: error.message,
           }),
         );
-        if (attempt === 1 || error.retryable === false) throw error;
-        correction = { error: error.message, previousOutput: output.slice(0, 32000) };
+        if (error.retryable === false) throw error;
+        // An invalid map gets several rounds: the validator reports only the first
+        // problem it finds, so a layout with more than one needs more than one round to
+        // converge. Anything else — a transport failure, an empty or truncated answer —
+        // gets a single retry, because repeating it is unlikely to converge on anything.
+        if (reported.length >= (error.layout ? MAX_CORRECTIONS : 1)) throw error;
+        correction = {
+          error: error.message,
+          ...(reported.length ? { previousErrors: [...reported] } : {}),
+          previousOutput: output.slice(0, 32000),
+        };
+        reported.push(error.message);
       }
     }
   };

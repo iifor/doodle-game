@@ -82,7 +82,7 @@ export const BRIDGE_RISE = 4; // the tallest step flight a deck can carry to the
 export const BUILDING_ARCHETYPES = {
   tower: { w: 8, d: 8, h: 12 },
   warehouse: { w: 12, d: 12, h: 8 },
-  courtyard: { w: 16, d: 16, h: 4 },
+  courtyard: { w: 12, d: 12, h: 4 },
 };
 export const FACES = {
   north: [0, -1],
@@ -90,6 +90,22 @@ export const FACES = {
   west: [-1, 0],
   east: [1, 0],
 };
+// Whether a deck can be laid between two roofs, and in plain words why not when it
+// cannot. Used both to expand a requested bridge and to suggest pairs that would work,
+// because "this span is too long" alone leaves the model guessing at the next pair.
+function bridgeFit(a, c) {
+  const spanX = Math.abs(a.x - c.x) > Math.abs(a.z - c.z);
+  const gap = spanX ? Math.abs(a.x - c.x) - (a.w + c.w) / 2 : Math.abs(a.z - c.z) - (a.d + c.d) / 2;
+  const lo = spanX ? Math.max(a.z - a.d / 2, c.z - c.d / 2) : Math.max(a.x - a.w / 2, c.x - c.w / 2);
+  const hi = spanX ? Math.min(a.z + a.d / 2, c.z + c.d / 2) : Math.min(a.x + a.w / 2, c.x + c.w / 2);
+  const rise = Math.abs(a.h - c.h);
+  if (!number(gap, 4, 30)) return { reason: `跨度（相对立面净距）${gap.toFixed(1)} 米，超出 4–30 米` };
+  if (hi - lo < BRIDGE_WIDTH + 1) return { reason: '两栋在横向没有足够重合，搭不出通路' };
+  if (rise > BRIDGE_RISE) return { reason: `两端屋顶相差 ${rise} 米，超过 ${BRIDGE_RISE} 米接不上` };
+  if (rise > 0.4 && gap < STAIR_FLIGHT + 2.7)
+    return { reason: `两端有 ${rise} 米落差，跨度需要至少 ${STAIR_FLIGHT + 2.7} 米才放得下接续台阶` };
+  return { spanX, gap, lo, hi, rise };
+}
 export function expandStructures(raw, buildings) {
   if (raw.structures === undefined) return [];
   requireWorld(
@@ -132,20 +148,23 @@ export function expandStructures(raw, buildings) {
     );
     const a = buildings[s.from],
       c = buildings[s.to];
-    const spanX = Math.abs(a.x - c.x) > Math.abs(a.z - c.z);
-    const gap = spanX ? Math.abs(a.x - c.x) - (a.w + c.w) / 2 : Math.abs(a.z - c.z) - (a.d + c.d) / 2;
-    requireWorld(number(gap, 4, 30), `天桥跨度 ${gap.toFixed(1)} 米超出 4–30 米`);
-    const lo = spanX ? Math.max(a.z - a.d / 2, c.z - c.d / 2) : Math.max(a.x - a.w / 2, c.x - c.w / 2);
-    const hi = spanX ? Math.min(a.z + a.d / 2, c.z + c.d / 2) : Math.min(a.x + a.w / 2, c.x + c.w / 2);
-    requireWorld(hi - lo >= BRIDGE_WIDTH + 1, '天桥两端建筑在横向没有足够重合，无法搭出通路');
     // The deck is laid flush with the lower roof and the engine steps up to the higher
     // one, so a bridge always lands somewhere you can stand.
-    const rise = Math.abs(a.h - c.h);
-    requireWorld(rise <= BRIDGE_RISE, `天桥两端屋顶相差 ${rise} 米，超过 ${BRIDGE_RISE} 米无法接上`);
-    requireWorld(
-      rise <= 0.4 || gap >= STAIR_FLIGHT + 2.7,
-      `天桥两端有 ${rise} 米落差，跨度需要至少 ${STAIR_FLIGHT + 2.7} 米才放得下接续台阶`,
-    );
+    const fit = bridgeFit(a, c);
+    if (fit.reason) {
+      const usable = [];
+      for (let i = 0; i < buildings.length && usable.length < 3; i++)
+        for (let j = i + 1; j < buildings.length && usable.length < 3; j++)
+          if (!bridgeFit(buildings[i], buildings[j]).reason) usable.push(`${i}与${j}`);
+      requireWorld(
+        false,
+        `天桥 from=${s.from} to=${s.to}（中心(${a.x},${a.z})与中心(${c.x},${c.z})）${fit.reason}。` +
+          (usable.length
+            ? `本区块可以架桥的相邻组合有：${usable.join('、')}`
+            : '本区块没有任何一对建筑能架桥，请去掉 bridge 或改放 stair'),
+      );
+    }
+    const { spanX, lo, hi, rise } = fit;
     // The deck runs between the two facing facades and is centred on their overlap.
     const [first, second] = spanX ? (a.x < c.x ? [a, c] : [c, a]) : a.z < c.z ? [a, c] : [c, a];
     const start = spanX ? first.x + first.w / 2 : first.z + first.d / 2;
@@ -178,29 +197,40 @@ export function validateLayout(raw, seed, x, z) {
   requireWorld(Array.isArray(raw.cover) && raw.cover.length <= 32, '掩体数量无效');
   requireWorld(Array.isArray(raw.roads) && raw.roads.length >= 1 && raw.roads.length <= 24, '道路数量无效');
   const rectangles = [];
-  for (const [items, minH, maxH] of [
-    [raw.buildings, 3, 18],
-    [raw.cover, 0.7, 2],
+  for (const [items, minH, maxH, label] of [
+    [raw.buildings, 3, 18, '建筑'],
+    [raw.cover, 0.7, 2, '掩体'],
   ]) {
     for (const b of items) {
       requireWorld(
-        b &&
-          number(b.x, 10, 118) &&
-          number(b.z, 10, 118) &&
-          number(b.w, 1, 24) &&
-          number(b.d, 1, 24) &&
-          number(b.h, minH, maxH),
-        '建筑或掩体尺寸无效',
+        b && [b.x, b.z, b.w, b.d, b.h].every(Number.isFinite),
+        `每个${label}都需要数字的 x、z、w、d、h 五个字段`,
+      );
+      requireWorld(
+        number(b.x, 10, 118) && number(b.z, 10, 118),
+        `${label}中心(${b.x},${b.z})超出范围，中心的 x 和 z 都必须在 10–118`,
+      );
+      requireWorld(
+        number(b.w, 1, 24) && number(b.d, 1, 24),
+        `中心(${b.x},${b.z})的${label}宽深(${b.w},${b.d})超出范围，w 和 d 都必须在 1–24 米`,
+      );
+      requireWorld(
+        number(b.h, minH, maxH),
+        `中心(${b.x},${b.z})的${label}高度 ${b.h} 超出范围，必须在 ${minH}–${maxH} 米`,
       );
       requireWorld(
         b.x - b.w / 2 >= 8 && b.x + b.w / 2 <= 120 && b.z - b.d / 2 >= 8 && b.z + b.d / 2 <= 120,
         `组件占用区块接缝：中心(${b.x},${b.z})、宽深(${b.w},${b.d})；边缘必须在[8,120]`,
       );
+      // Naming both rectangles matters: a correction round is wasted whenever the model
+      // has to guess which of the two it should move.
+      const clash = rectangles.find(
+        (a) => Math.abs(a.x - b.x) < (a.w + b.w) / 2 + 1 && Math.abs(a.z - b.z) < (a.d + b.d) / 2 + 1,
+      );
       requireWorld(
-        !rectangles.some(
-          (a) => Math.abs(a.x - b.x) < (a.w + b.w) / 2 + 1 && Math.abs(a.z - b.z) < (a.d + b.d) / 2 + 1,
-        ),
-        `建筑或掩体相互重叠：中心(${b.x},${b.z})、宽深(${b.w},${b.d})`,
+        !clash,
+        clash &&
+          `中心(${b.x},${b.z})、宽深(${b.w},${b.d})的组件与中心(${clash.x},${clash.z})、宽深(${clash.w},${clash.d})的组件重叠；两者外缘至少间隔1米`,
       );
       rectangles.push(b);
     }
@@ -252,8 +282,12 @@ export function validateLayout(raw, seed, x, z) {
     );
     rectangles.push(s.rect);
   }
-  const blocked = (x, z, r = 0.6) =>
-    rectangles.some((b) => Math.abs(b.x - x) < b.w / 2 + r && Math.abs(b.z - z) < b.d / 2 + r);
+  // Returns the offending rectangle rather than a bare boolean, so every message below
+  // can say which component is in the way instead of leaving the model to search.
+  const blocker = (x, z, r = 0.6) =>
+    rectangles.find((b) => Math.abs(b.x - x) < b.w / 2 + r && Math.abs(b.z - z) < b.d / 2 + r);
+  const describe = (b) => `中心(${b.x},${b.z})、宽深(${b.w},${b.d})的${b.h > 2 ? '建筑' : '掩体'}`;
+  const blocked = (x, z, r) => !!blocker(x, z, r);
   for (const road of raw.roads) {
     requireWorld(
       Array.isArray(road) &&
@@ -267,26 +301,31 @@ export function validateLayout(raw, seed, x, z) {
     requireWorld(length > 0, '道路长度无效');
     for (let i = 0; i <= Math.ceil(length); i++) {
       const t = i / Math.ceil(length);
+      const hit = blocker(road[0] + (road[2] - road[0]) * t, road[1] + (road[3] - road[1]) * t, 4);
       requireWorld(
-        !blocked(road[0] + (road[2] - road[0]) * t, road[1] + (road[3] - road[1]) * t, 4),
-        `建筑挡住道路：道路[${road.join(',')}]，中线两侧各4米需留空`,
+        !hit,
+        hit && `道路[${road.join(',')}]被${describe(hit)}挡住；道路中线两侧各4米必须留空，掩体也不例外`,
       );
     }
   }
   requireWorld(point(raw.landmark) && point(raw.supply), '地标或补给点无效');
   const camp = x === 0 && z === 0;
-  requireWorld(
-    camp
-      ? raw.outpost === null
-      : raw.outpost &&
-          point(raw.outpost.center) &&
-          Array.isArray(raw.outpost.spawns) &&
-          (raw.outpost.encounterVersion === 1
-            ? raw.outpost.spawns.length >= 1 && raw.outpost.spawns.length <= MAX_ENCOUNTER_ENEMIES
-            : raw.outpost.spawns.length === 4) &&
-          raw.outpost.spawns.every(point),
-    '据点出生点无效',
-  );
+  if (camp) requireWorld(raw.outpost === null, '营地区块[0,0]的 outpost 必须是 null');
+  else {
+    requireWorld(
+      raw.outpost && typeof raw.outpost === 'object',
+      `区块[${x},${z}]不是营地，outpost 不能为 null，必须给出 center 和敌人出生点`,
+    );
+    requireWorld(point(raw.outpost.center), '据点 center 必须是区块内的[x,z]，两个坐标都在 4–124');
+    requireWorld(Array.isArray(raw.outpost.spawns), '据点 spawns 必须是[x,z]数组');
+    const count = raw.outpost.spawns.length;
+    requireWorld(
+      raw.outpost.encounterVersion === 1 ? count >= 1 && count <= MAX_ENCOUNTER_ENEMIES : count === 4,
+      `据点给了 ${count} 个出生点，需要恰好 4 个`,
+    );
+    const stray = raw.outpost.spawns.find((p) => !point(p));
+    requireWorld(!stray, stray && `出生点 ${JSON.stringify(stray)} 无效，必须是[x,z]且两个坐标都在 4–124`);
+  }
   if (!camp && raw.outpost.encounterVersion !== undefined) {
     requireWorld(
       raw.outpost.encounterVersion === 1 &&
@@ -333,7 +372,10 @@ export function validateLayout(raw, seed, x, z) {
     raw.supply,
     ...(camp ? [[64, 64]] : [raw.outpost.center, ...raw.outpost.spawns]),
   ];
-  for (const p of goals) requireWorld(!blocked(...p, 1.2), '出生点、地标或补给与障碍物重叠');
+  for (const p of goals) {
+    const hit = blocker(...p, 1.2);
+    requireWorld(!hit, hit && `点(${p[0]},${p[1]})被${describe(hit)}占住；地标、补给和出生点周围需留出1.2米`);
+  }
   // A two-metre walkability grid checks the whole block, not just a straight-line guess.
   const seen = new Set(),
     queue = [[Math.floor(goals[0][0] / 2), Math.floor(goals[0][1] / 2)]];
@@ -356,7 +398,10 @@ export function validateLayout(raw, seed, x, z) {
     }
   }
   for (const [a, b] of goals)
-    requireWorld(seen.has(keyOf(Math.floor(a / 2), Math.floor(b / 2))), '区域出口或据点不可达');
+    requireWorld(
+      seen.has(keyOf(Math.floor(a / 2), Math.floor(b / 2))),
+      `点(${a},${b})被建筑围住，从其它出口走不到；请让开一条通路`,
+    );
   return {
     name: raw.name.trim(),
     roads: raw.roads.map((r) => [...r]),

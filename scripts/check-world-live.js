@@ -142,6 +142,10 @@ try {
     name: b.layout.name,
     buildings: b.layout.buildings.length,
     cover: b.layout.cover.length,
+    // Whether the model reached for the richer vocabulary, not just how much it drew.
+    archetypes: b.layout.buildings.map((a) => a.archetype).filter(Boolean),
+    structures: (b.layout.structures ?? []).map((s) => s.type),
+    heights: b.layout.buildings.map((a) => a.h),
     checksum: b.checksum,
   }));
 } catch (error) {
