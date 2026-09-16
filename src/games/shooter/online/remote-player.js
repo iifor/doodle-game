@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { makeInkMaterial, setFill, INK } from '../render.js';
 import { buildHumanoid, buildWeaponProp } from '../enemies/models.js';
 import { clamp, damp, angleLerp } from '../util.js';
+import { bladeRecovering, CANNON_CHARGE } from '../abilities.js';
 
 import { disposeTree } from '../../../shared/resources.js';
 import { validateSnap, requireValue } from './protocol.js';
@@ -13,7 +14,7 @@ import { validateSnap, requireValue } from './protocol.js';
 const _v = new THREE.Vector3(),
   _v2 = new THREE.Vector3(),
   _up = new THREE.Vector3(0, 1, 0);
-const WEAPON_KINDS = ['rifle', 'shotgun', 'sniper', 'blade'];
+const WEAPON_KINDS = ['rifle', 'shotgun', 'sniper', 'blade', 'cannon', 'staff'];
 const HIT = [
   ['head', 0.3],
   ['torso', 0.33],
@@ -154,6 +155,35 @@ export class RemotePlayer {
       makeInkMaterial({ ink: this.ink, fill: true, side: THREE.DoubleSide }),
     );
     this.tagG.add(flag);
+    this.barrierEffect = new THREE.Group();
+    for (const angle of [0, Math.PI / 2]) {
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(1, 0.025, 5, 32),
+        makeInkMaterial({ ink: INK.CYAN, fill: true }),
+      );
+      ring.rotation.y = angle;
+      this.barrierEffect.add(ring);
+    }
+    this.barrierEffect.position.y = 1;
+    this.barrierEffect.scale.set(0.7, 1.05, 0.7);
+    this.root.add(this.barrierEffect);
+    this.chargeEffect = new THREE.Mesh(
+      new THREE.SphereGeometry(0.14, 12, 8),
+      makeInkMaterial({ ink: INK.ORANGE, fill: true }),
+    );
+    this.chargeEffect.position.set(0, -0.24, 0.85);
+    this.J.foreR.add(this.chargeEffect);
+    this.recoveryEffect = new THREE.Group();
+    for (const x of [-0.08, 0.08]) {
+      const bar = new THREE.Mesh(
+        new THREE.BoxGeometry(0.07, 0.25, 0.04),
+        makeInkMaterial({ ink: INK.ORANGE, fill: true }),
+      );
+      bar.position.set(x, 0.35, 0);
+      this.recoveryEffect.add(bar);
+    }
+    this.tagG.add(this.recoveryEffect);
+    this.barrierEffect.visible = this.chargeEffect.visible = this.recoveryEffect.visible = false;
     this.corpse = false;
   }
   get isBlocking() {
@@ -170,7 +200,7 @@ export class RemotePlayer {
     for (const child of [...gun.children]) disposeTree(child, false);
     buildWeaponProp(gun, this.mat, this.solid, { weapon: WEAPON_KINDS[i] });
   }
-  push(snap, t) {
+  push(snap, t, combat = {}, combatTime = t) {
     validateSnap(snap, this.ctx.exploration ? 3e8 : 100);
     this.snapA = this.snapB || {
       p: new THREE.Vector3(snap[0], snap[1], snap[2]),
@@ -211,6 +241,22 @@ export class RemotePlayer {
       this.root.visible = true;
     }
     if (this.root && this.away) this.root.visible = false;
+    this.setCombatState(combat, combatTime, t);
+  }
+  setCombatState(combat, time, receivedAt) {
+    this.combat = combat;
+    this.combatTime = time;
+    this.combatReceivedAt = receivedAt;
+  }
+  _updateCombat(now) {
+    const p = this.combat ?? {},
+      time = this.combatTime + Math.max(0, now - this.combatReceivedAt),
+      visible = this.alive && !this.away,
+      chargeLeft = (p.chargedAt ?? 0) - time;
+    this.barrierEffect.visible = visible && p.barrier > 0 && p.barrierUntil > time;
+    this.chargeEffect.visible = visible && p.profile?.role === 'cannon' && chargeLeft > 0;
+    this.chargeEffect.scale.setScalar(2 - clamp(chargeLeft / CANNON_CHARGE, 0, 1));
+    this.recoveryEffect.visible = visible && bladeRecovering(p, time);
   }
   // damage dealt to this player by the host's bots or by another player's shot goes to its owner
   takeDamage(amount, fromPos) {
@@ -269,6 +315,7 @@ export class RemotePlayer {
     }
     this.root.position.copy(this.body.pos);
     this.root.rotation.y = this.yaw + Math.PI;
+    this._updateCombat(now);
     this._animate(dt);
     this.root.updateMatrixWorld(true);
     for (let i = 0; i < HIT.length; i++)
@@ -331,7 +378,7 @@ export class RemotePlayer {
     }
     // guns are carried up and forward, two hands on them, tilting with where they look; the
     // blade hangs at the side until it is raised to guard
-    const blade = this.weaponIndex === WEAPON_KINDS.length - 1;
+    const blade = this.weaponIndex === 3;
     const aim = blade ? 0 : this.aiming ? 1 : sp > 6.5 ? 0.8 : 0.95;
     const look = clamp(this.pitch, -1.1, 1.1);
     if (blade) {
@@ -341,6 +388,10 @@ export class RemotePlayer {
       J.foreR.rotation.x = -1.0 - g * 0.6;
       J.armL.rotation.x = s * 0.8 * w * (1 - g) - g * 1.4;
       J.foreL.rotation.x = -0.5;
+      if (this.recoveryEffect.visible && !this.blocking) {
+        J.armR.rotation.x = -0.3;
+        J.foreR.rotation.x = -0.3;
+      }
     } else {
       J.armR.rotation.x = (-1.35 - look * 0.85) * aim - s * 0.6 * w * (1 - aim);
       J.armR.rotation.z = -0.2 * (1 - aim);

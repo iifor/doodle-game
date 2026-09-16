@@ -1,9 +1,20 @@
+import { CLASSES, WEAPON_IDS, armorDamage } from './character.js';
+import { trainingCombat } from './training-combat.js';
+import {
+  castAbility,
+  bladeRecovering,
+  absorbBarrier,
+  SKILL_COOLDOWNS,
+  GUARD_WINDOW,
+  GUARD_RECOVERY,
+  GUARD_DAMAGE,
+} from './abilities.js';
 // First-person player: movement (sprint/slide/wall-jump/mantle/air dash), swing-grapple, camera feel, health, weapons.
 import * as THREE from 'three';
 import { disposeTree } from '../../shared/resources.js';
 import { makeBody } from './physics.js';
 import { makeInkMaterial, INK } from './render.js';
-import { Rifle, Shotgun, Sniper } from './weapons/guns.js';
+import { Rifle, Shotgun, Sniper, Cannon, Staff } from './weapons/guns.js';
 import { Katana } from './weapons/katana.js';
 // the dome shell and anything else flagged this way cannot be hooked
 const NO_GRAPPLE = (b) => !!b.data.noGrapple;
@@ -13,7 +24,7 @@ const STAM_FIRE = 0.09,
   STAM_AIR = 0.2,
   STAM_MIN = 0.18,
   STAM_PAUSE = 0.5,
-  PARRY_WINDOW = 0.55;
+  PARRY_WINDOW = GUARD_WINDOW;
 import { clamp, damp, rand, Spring, alignYAxis } from './util.js';
 import { audio } from './audio.js';
 
@@ -67,7 +78,14 @@ export class Player {
     this.rig = new THREE.Group();
     this.camera.add(this.rig);
     ctx.scene.add(this.camera);
-    this.weapons = [new Rifle(ctx), new Shotgun(ctx), new Sniper(ctx), new Katana(ctx)];
+    this.weapons = [
+      new Rifle(ctx),
+      new Shotgun(ctx),
+      new Sniper(ctx),
+      new Katana(ctx),
+      new Cannon(ctx),
+      new Staff(ctx),
+    ];
     this.katanaIndex = 3;
     for (const w of this.weapons) {
       this.rig.add(w.root);
@@ -148,7 +166,66 @@ export class Player {
     this.hookMesh.visible = false;
     ctx.scene.add(this.hookMesh);
   }
+  configure(profile) {
+    this.profile = profile;
+    if (profile) {
+      this.maxHp = profile.stats.health;
+      this.switchTo(WEAPON_IDS.indexOf(profile.weapon), true);
+    }
+  }
+  showAbility(e) {
+    const ink = e.hostile ? INK.RED : INK.BLUE;
+    if ((e.role === 'mage' && e.index === 0) || (e.role === 'cannon' && e.index === 1)) {
+      const radius = e.role === 'mage' ? 5 : 6,
+        pos = new THREE.Vector3(...e.end);
+      for (let i = 0; i < 24; i++) {
+        const point = (angle) =>
+          pos.clone().add(new THREE.Vector3(Math.cos(angle) * radius, 0, Math.sin(angle) * radius));
+        this.ctx.effects.tracer(
+          point((i * Math.PI) / 12),
+          point(((i + 1) * Math.PI) / 12),
+          ink,
+          0.08,
+          e.role === 'mage' ? 4 : 0.5,
+        );
+      }
+    }
+    if (e.move) {
+      this.detachGrapple(false);
+      this.body.pos.fromArray(e.move);
+      this.body.vel.set(0, 0, 0);
+      this._updateCamera(0);
+    }
+    if (e.origin && e.end)
+      this.ctx.effects.tracer(new THREE.Vector3(...e.origin), new THREE.Vector3(...e.end), ink, 0.12, 0.4);
+  }
+  skill(index) {
+    if (!this.profile) return;
+    const now = this.ctx.game.time;
+    if (bladeRecovering(this, now) || (this.profile.role === 'blade' && this.weapon.cooldown > 0)) return;
+    const cd = SKILL_COOLDOWNS[this.profile.role][index] + (index === 0 && this.profile.empowered ? 2 : 0);
+    if (now - (this.skillTimes?.[index] ?? -100) < cd) return;
+    if (this.profile.role === 'mage' && this.inkEnergy < 30) return;
+    if (this.ctx.pvp?.enabled) this.ctx.pvp.skill(index);
+    else {
+      this.training ??= trainingCombat(this.ctx);
+      this.training.update(0);
+      if (!castAbility(this.training, this.training.actor, index)) return;
+    }
+    this.skillTimes[index] = now;
+    if (this.profile.role === 'mage') this.inkEnergy -= 30;
+    this.ctx.hud.tip(CLASSES[this.profile.role].skills[index], 1);
+  }
   reset(pos) {
+    this.skillTimes = [-100, -100];
+    this.inkEnergy = 100;
+    this.training = null;
+    this.counter = false;
+    this.slowUntil = 0;
+    this.focusUntil = 0;
+    this.barrier = 0;
+    this.barrierUntil = 0;
+    this.precisionReload = false;
     this.nadeCharge = 0;
     this._nadeHeld = false;
     if (this._arc) this.updateNadeArc(-1);
@@ -210,7 +287,7 @@ export class Player {
     b.noSnap = false;
     this.grapple.cd = 0;
     this._mv = { x: 0, y: 0 };
-    this.switchTo(0, true);
+    this.switchTo(this.profile ? WEAPON_IDS.indexOf(this.profile.weapon) : 0, true);
     this.rig.visible = true;
     this.eyeH = EYE_STAND;
     this.grenades = 3;
@@ -268,6 +345,7 @@ export class Player {
   switchTo(i, silent = false) {
     if (!Number.isInteger(i) || i < 0 || i >= this.weapons.length)
       throw new RangeError(`Invalid weapon slot: ${i}`);
+    if (this.profile && WEAPON_IDS[i] !== this.profile.weapon) return;
     if (i === this.weaponIndex && !silent) return;
     if (this.weapon.kind !== 'katana') this.prevWeaponIndex = this.weaponIndex;
     this.weapon.unequip();
@@ -286,6 +364,11 @@ export class Player {
       return this.ctx.exploration.damagePlayer(this.ctx.exploration.selfId, amount, fromPos);
     if (!Number.isFinite(amount) || amount < 0) throw new RangeError(`Invalid player damage: ${amount}`);
     if (!this.alive) return;
+    if (!this.ctx.pvp?.enabled)
+      amount = armorDamage(
+        absorbBarrier(this.training?.actor ?? this, amount, this.ctx.game.time),
+        this.profile,
+      );
     this.hp -= amount;
     this.lastDamageT = 0;
     this.hurtFx = Math.min(1, this.hurtFx + amount / 40);
@@ -312,18 +395,19 @@ export class Player {
   // The guard only covers what is right in front of the blade: a modest reach and a narrow
   // cone, so shots from your flank still land and holding block is not a free win.
   get blockRadius() {
-    return this.isBlocking && this.blockCd <= 0 ? 0.95 : 0;
+    return this.isBlocking && this.blockCd <= 0 && this.weapon.blockT < GUARD_WINDOW ? 0.95 : 0;
   }
   tryDeflect(proj) {
-    if (!this.alive || !this.isBlocking || this.blockCd > 0) return false;
+    if (!this.alive || !this.isBlocking || this.blockCd > 0 || proj.blast) return false;
     // block only what is flying in at you from the front; flank and back shots get through
     _v.copy(proj.vel).normalize().negate();
     if (_v.dot(this.forward) < 0.55) return false;
-    const perfect = this.weapon.blockT < 0.26;
+    const perfect = this.weapon.blockT < GUARD_WINDOW;
     const ctx = this.ctx;
     // only a well timed guard sends it back; otherwise the round is simply knocked out of the air
-    const ret = perfect || Math.random() < 0.35;
-    this.blockCd = 0.19; // the blade has to come back before the next parry
+    const ret = perfect;
+    if (!perfect) this.takeDamage(proj.dmg * GUARD_DAMAGE, proj.origin);
+    this.blockCd = GUARD_RECOVERY; // the blade has to come back before the next parry
     this.weapon.onDeflect(perfect);
     if (perfect) audio.perfectParry();
     else audio.parry();
@@ -404,6 +488,40 @@ export class Player {
       this.weapon.animate(dt, this._weaponState(false, false, 0));
       return;
     }
+    if (this.profile) {
+      this.skillTimes ??= [-100, -100];
+      this.inkEnergy = Math.min(100, (this.inkEnergy ?? 100) + dt * 4);
+      if (!ctx.pvp?.enabled) {
+        this.training ??= trainingCombat(ctx);
+        this.training.update(dt);
+        this.inkEnergy = this.training.actor.energy;
+        this.focusUntil = this.training.actor.focusUntil;
+        this.barrier = this.training.actor.barrier;
+        this.barrierUntil = this.training.actor.barrierUntil;
+      }
+      if (inp.pressed('melee')) this.skill(0);
+      if (inp.pressed('grenade')) this.skill(1);
+      const role = CLASSES[this.profile.role];
+      const status = role.skills
+        .map(
+          (name, i) =>
+            `${i ? 'G' : 'F'} ${name} ${Math.max(0, Math.ceil(SKILL_COOLDOWNS[this.profile.role][i] + (i === 0 && this.profile.empowered ? 2 : 0) - (ctx.game.time - this.skillTimes[i]))) || '就绪'}`,
+        )
+        .join(' · ');
+      if (!ctx.hud.roleStatus) {
+        ctx.hud.roleStatus = document.createElement('div');
+        ctx.hud.roleStatus.className = 'role-status';
+        ctx.hud.root.append(ctx.hud.roleStatus);
+      }
+      ctx.hud.roleStatus.textContent =
+        status +
+        (this.profile.role === 'mage' ? ` · 墨能 ${Math.floor(this.inkEnergy)}` : '') +
+        (this.barrierUntil > ctx.game.time && this.barrier > 0
+          ? ` · 战术护盾 ${Math.ceil(this.barrier)}`
+          : '') +
+        (bladeRecovering(this, ctx.game.time) ? ' · 收招中' : '') +
+        (ctx.trial ? ' · 临时试用' : '');
+    }
     this.rig.visible = true;
     // ---- look ----
     const lookMul = this._aiming ? (this.weapon.scope ? 0.38 : 0.62) : 1;
@@ -453,7 +571,9 @@ export class Player {
     this.crouching = wantCrouch;
     b.height = this.crouching ? CROUCH_H : STAND_H;
     const sprinting = (this._sprinting = this.sprintToggle && mv.y > 0.1 && !this.crouching && !aiming);
-    const maxSpeed = this.crouching && !this.sliding ? CROUCH : sprinting ? SPRINT : WALK;
+    const maxSpeed =
+      (this.crouching && !this.sliding ? CROUCH : sprinting ? SPRINT : WALK) *
+      (this.slowUntil > ctx.game.time ? 0.55 : 1);
     this.landGraceT -= dt;
     this.dashCd -= dt;
     this.blockCd -= dt;
@@ -577,6 +697,15 @@ export class Player {
     if (!b.onGround && this.mantleCd <= 0 && mv.y > 0.3 && b.vel.y < 8 && this.grapple.state !== 'on')
       this._tryMantle(_fwd);
     b.noSnap = this.grapple.state === 'on' || b.vel.y > 0.5;
+    // Slow also constrains momentum, air dashes and grapple acceleration.
+    if (this.slowUntil > ctx.game.time) {
+      const horizontal = Math.hypot(b.vel.x, b.vel.z);
+      const limit = SPRINT * 0.55;
+      if (horizontal > limit) {
+        b.vel.x *= limit / horizontal;
+        b.vel.z *= limit / horizontal;
+      }
+    }
     const spd = b.vel.length();
     if (spd > 48) b.vel.multiplyScalar(48 / spd);
     ctx.world.moveBody(b, dt);
@@ -607,7 +736,7 @@ export class Player {
       !this._sprinting &&
       this.grapple.state === 'idle'
     )
-      this.hp = Math.min(this.maxHp, this.hp + this.regenRate * dt);
+      this.hp = Math.min(this.maxHp, this.hp + armorDamage(this.regenRate * dt, this.profile));
     this.blockHeld = this.isBlocking ? this.blockHeld + dt : 0;
     // the grapple runs on breath: hanging drains it, feet on the ground bring it back fast
     this.stamPause -= dt;
@@ -632,7 +761,14 @@ export class Player {
     this._updateCamera(dt);
     // ---- grenades ----
     this.nadeCd -= dt;
-    if (inp.down('grenade') && this.grenades > 0 && this.nadeCd <= 0 && this.alive && !this.dashLock) {
+    if (
+      !this.profile &&
+      inp.down('grenade') &&
+      this.grenades > 0 &&
+      this.nadeCd <= 0 &&
+      this.alive &&
+      !this.dashLock
+    ) {
       this.nadeCharge = Math.min(1, this.nadeCharge + dt / 1.1);
       this._nadeHeld = true;
     } else if (this._nadeHeld) {
@@ -649,7 +785,7 @@ export class Player {
     if (inp.pressed('prevWeapon'))
       this.switchTo((this.weaponIndex + this.weapons.length - 1) % this.weapons.length);
     const st = this._weaponState(sprinting, aiming, hs2);
-    if (inp.pressed('melee') && this.weapon.kind !== 'katana') {
+    if (!this.profile && inp.pressed('melee') && this.weapon.kind !== 'katana') {
       this.switchTo(this.katanaIndex);
       this.returnT = 0.85;
       this.weapons[this.katanaIndex].startSlash(st);
@@ -721,11 +857,20 @@ export class Player {
       pos,
       vel,
       ang: new THREE.Vector3(rand(-6, 6), rand(-6, 6), rand(-6, 6)),
-      fuse: 1.7,
+      shellId: remote?.shellId,
+      fuse: remote?.shellId ? 3 : 1.7,
       mine: !remote,
       rest: false,
       tick: 0,
     });
+  }
+  burstShell(event) {
+    const i = this.nades.findIndex((n) => n.shellId === event.shellId);
+    if (i >= 0) {
+      disposeTree(this.nades[i].mesh);
+      this.nades.splice(i, 1);
+    }
+    this.explodeNade({ pos: new THREE.Vector3(...event.pos), mine: false });
   }
   updateNadeArc(charge) {
     if (!this._arc) {
@@ -801,7 +946,7 @@ export class Player {
       n.fuse -= dt;
       n.tick += dt;
       if (!n.rest) {
-        n.vel.y -= 22 * dt;
+        n.vel.y -= (n.shellId ? 4 : 22) * dt;
         _v2.copy(n.pos);
         n.pos.addScaledVector(n.vel, dt);
         _d.subVectors(n.pos, _v2);
@@ -811,6 +956,10 @@ export class Player {
           const hit = world.raycast(_v2, _d, len + 0.16);
           if (hit) {
             n.pos.copy(hit.point).addScaledVector(hit.normal, 0.16);
+            if (n.shellId) {
+              n.rest = true;
+              n.vel.set(0, 0, 0);
+            }
             const vn = n.vel.dot(hit.normal);
             if (vn < 0) {
               n.vel.addScaledVector(hit.normal, -1.45 * vn);
@@ -838,7 +987,8 @@ export class Player {
           size: 0.02,
         });
       if (n.fuse <= 0) {
-        this.explodeNade(n);
+        // Shell impacts are displayed only when the authority confirms their position.
+        if (!n.shellId) this.explodeNade(n);
         disposeTree(n.mesh);
         this.nades.splice(i, 1);
       }
@@ -853,11 +1003,11 @@ export class Player {
     audio.explosion(c);
     ctx.input.rumble(0.9, 0.9, 220);
     // bots: the thrower's client reports the damage (host applies it; a client's report is forwarded)
-    if (n.mine && !ctx.exploration) ctx.enemies.blastEnemies(c, R, 120, null);
+    if (n.mine && !ctx.pvp?.enabled) ctx.enemies.blastEnemies(c, R, 120, null);
     if (n.mine) ctx.blastBreakables(c, R);
     // me: my own grenade, or anyone else's that went off on my screen
     const d = this.center.distanceTo(c);
-    if (!ctx.pvp?.enabled && this.alive && d < R * 0.95) {
+    if (!this.profile && !ctx.pvp?.enabled && this.alive && d < R * 0.95) {
       this.takeDamage(10 + 34 * (1 - d / (R * 0.95)), c);
       this.knockback(_v.subVectors(this.center, c).normalize(), 9);
     }
@@ -871,7 +1021,7 @@ export class Player {
       firePressed: inp.pressed('fire'),
       aim: aiming || (inp.down('aim') && this.weapon.kind === 'katana'),
       reloadPressed: inp.pressed('reload'),
-      meleePressed: inp.pressed('melee') && this.weapon.kind === 'katana',
+      meleePressed: !this.profile && inp.pressed('melee') && this.weapon.kind === 'katana',
       sprinting,
       grounded: b.onGround,
       speed: hs,
@@ -882,7 +1032,7 @@ export class Player {
       bobAmt: this.bobAmt,
       landDip: clamp(-this.landDip.value * 0.08, -0.5, 0.5),
       slideTilt: this.sliding ? 1 : 0,
-      blockFire: !this.alive,
+      blockFire: !this.alive || bladeRecovering(this, this.ctx.game.time),
     };
   }
   _startSlide(hs) {

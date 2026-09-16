@@ -514,7 +514,9 @@ export class WorldStore {
             old = p.chunks[key];
           requireWorld(
             !old ||
-              (old.defeated.every((n) => state.defeated.includes(n)) && (!old.rewarded || state.rewarded)),
+              (old.defeated.every((n) => state.defeated.includes(n)) &&
+                (!old.rewarded || state.rewarded) &&
+                (!old.powered || state.powered)),
             '不能回退已经保存的进度',
           );
           p.chunks[key] = outpostComplete(state)
@@ -541,7 +543,9 @@ export class WorldStore {
           else {
             const state = validateProgress(patch.run, 4);
             requireWorld(
-              old.defeated.every((n) => state.defeated.includes(n)) && (!old.rewarded || state.rewarded),
+              old.defeated.every((n) => state.defeated.includes(n)) &&
+                (!old.rewarded || state.rewarded) &&
+                (!old.powered || state.powered),
               '不能回退挑战进度',
             );
             p.runs[b.id] = { ...state, runId: old.runId };

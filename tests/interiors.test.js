@@ -368,7 +368,7 @@ test('dynamic multiplayer waits for matching interior checksum, isolates snapsho
     saving: 0,
     unsaved: [],
     progress: { chunks: {} },
-    ctx: { player: { nades: [] }, enemies: { enemies: [], projectiles: { list: [] } } },
+    ctx: { game: { time: 10 }, player: { nades: [] }, enemies: { enemies: [], projectiles: { list: [] } } },
     report() {},
   });
   s.chunks = {
@@ -402,6 +402,7 @@ test('dynamic multiplayer waits for matching interior checksum, isolates snapsho
   s.ctx.enemies.enemies = [{ alive: true, body: { pos: new THREE.Vector3(64, 0, 64) } }];
   s.ctx.enemies.projectiles.list = [{ pos: new THREE.Vector3(64, 1, 64) }];
   const snapshot = s.snapshot(p.id);
+  assert.equal(snapshot.time, 10);
   assert.equal(snapshot.enemies.length, 0);
   assert.equal(snapshot.bullets.length, 0);
   assert.deepEqual(

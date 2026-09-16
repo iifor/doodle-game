@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { profileOf } from './character.js';
 import { Exploration } from './exploration/session.js';
 import { Multiplayer } from './online/multiplayer.js';
 import { InkRenderer } from './render.js';
@@ -51,6 +52,10 @@ export function mountShooter(canvas, root, onMenu, touchRoot, options = {}) {
     const hud = new HUD(root);
     const effects = new Effects(renderer.scene, world);
     const ctx = {
+      profile: options.profile,
+      characterStore: options.characterStore,
+      trial: options.trial,
+      trialCharacter: options.trialCharacter,
       scene: renderer.scene,
       camera: renderer.camera,
       renderer,
@@ -109,7 +114,15 @@ export function mountShooter(canvas, root, onMenu, touchRoot, options = {}) {
     const screens = createScreens(
       ctx,
       prefs,
-      { begin, menu, online: () => pvp.open(), explore: options.onExplore, settings: applySettings },
+      {
+        begin,
+        menu,
+        online: () => (options.trial ? options.onCharacter() : pvp.open()),
+        character: options.onCharacter,
+        trialEquip: options.onTrialEquip,
+        explore: options.onExplore,
+        settings: applySettings,
+      },
       onScreen,
     );
     const Session = options.explore ? Exploration : Multiplayer;
@@ -163,7 +176,8 @@ export function mountShooter(canvas, root, onMenu, touchRoot, options = {}) {
       enemies.clear();
       effects.clear();
       pickups.clear();
-      player.maxHp = game.mode === 'pvp' ? 110 : 120;
+      player.configure(ctx.profile);
+      player.maxHp = ctx.profile?.stats.health ?? (game.mode === 'pvp' ? 110 : 120);
       player.reset(ctx.level.playerStart);
       enemies.mods.speed = 1;
       enemies.mods.damage = 1;
@@ -186,7 +200,11 @@ export function mountShooter(canvas, root, onMenu, touchRoot, options = {}) {
       hud.reset();
     }
     async function begin(wave) {
-      if (starting || !running) return;
+      if (starting || !running || options.canBegin?.() === false) return;
+      if (!ctx.profile) {
+        options.onCharacter();
+        return;
+      }
       starting = true;
       try {
         if (input.device === 'touch' && canvas.clientWidth <= canvas.clientHeight) {
@@ -247,6 +265,8 @@ export function mountShooter(canvas, root, onMenu, touchRoot, options = {}) {
       }
     }
     function menu() {
+      if (!options.trial && options.characterStore?.read())
+        ctx.profile = profileOf(options.characterStore.read());
       game.mode = 'solo';
       setArena(false);
       game.state = 'start';
@@ -346,7 +366,7 @@ export function mountShooter(canvas, root, onMenu, touchRoot, options = {}) {
         scale = game.hitstopScale;
       } else if (game.focus.active) scale = focus.scale;
       const sdt = dt * scale;
-      if (game.state === 'play' && !pvp.enabled) focus.update(dt);
+      if (game.state === 'play' && !pvp.enabled && !ctx.profile) focus.update(dt);
       if (playing) {
         game.time += sdt;
         if (game.menu) input.clear();
@@ -387,20 +407,26 @@ export function mountShooter(canvas, root, onMenu, touchRoot, options = {}) {
       if (weapon.isGun) hud.setAmmo(weapon.mag, weapon.reserve, weapon.magSize, weapon.reloading);
       else hud.setKatana();
       hud.setSlots(
-        player.weapons.map((w, i) => ({
-          name: w.name,
-          active: i === player.weaponIndex,
-          ammo: w.isGun ? w.mag + '/' + w.reserve : '∞',
-          empty: w.isGun && w.mag === 0 && w.reserve === 0,
-        })),
+        ctx.profile
+          ? []
+          : player.weapons.map((w, i) => ({
+              name: w.name,
+              active: i === player.weaponIndex,
+              ammo: w.isGun ? w.mag + '/' + w.reserve : '∞',
+              empty: w.isGun && w.mag === 0 && w.reserve === 0,
+            })),
       );
-      hud.setGrenades(player.grenades);
+      hud.setGrenades(ctx.profile ? 0 : player.grenades);
+      if (hud.roleStatus) hud.roleStatus.hidden = !playing;
       hud.setGrappleStamina(player.grapStam);
       hud.setHealth(player.hp, player.maxHp);
       hud.setSpread(weapon.spreadPx);
       hud.update(dt);
       hud.setFocusMeter(
-        playing && !pvp.enabled && (weapon.kind === 'katana' || game.katanaStreak > 0 || game.focus.active),
+        playing &&
+          !ctx.profile &&
+          !pvp.enabled &&
+          (weapon.kind === 'katana' || game.katanaStreak > 0 || game.focus.active),
         game.focus.active ? 1 : clamp(game.katanaStreak / focus.chargeKills, 0, 1),
         game.focus.active,
       );

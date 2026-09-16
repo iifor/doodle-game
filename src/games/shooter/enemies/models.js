@@ -148,7 +148,19 @@ function buildHat(headG, mat, solid, T) {
   }
 }
 export function buildWeaponProp(gun, mat, solid, T) {
-  if (T.weapon === 'blade') {
+  if (T.weapon === 'staff') {
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.4, 8), mat);
+    shaft.rotation.x = Math.PI / 2;
+    shaft.position.z = 0.4;
+    gun.add(shaft);
+    sph(0.15, 0, 0, 1.1, mat, gun);
+  } else if (T.weapon === 'cannon') {
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.7, 8), mat);
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.z = 0.4;
+    gun.add(barrel);
+    bx(0.16, 0.2, 0.25, 0, -0.05, 0, solid, gun);
+  } else if (T.weapon === 'blade') {
     bx(0.02, 0.05, 0.95, 0, 0.04, 0.42, mat, gun);
     bx(0.11, 0.11, 0.03, 0, 0.04, -0.06, solid, gun);
     bx(0.035, 0.045, 0.24, 0, 0.04, -0.19, solid, gun);

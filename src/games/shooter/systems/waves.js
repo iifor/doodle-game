@@ -48,7 +48,7 @@ export function createWaves(ctx, pickups, focus, prefs) {
     `按住 <b>${hud.key('grapple')}</b> 拉近钩索 · 摆荡时再点按一次松开`,
     `按住 <b>${hud.key('block')}</b> 格挡，可将部分子弹反弹给敌人`,
     '空中击杀得分更高 · 保持腾空',
-    `按 <b>${hud.key('grenade')}</b> 投掷手雷 · 拾取补给可补充`,
+    `按 <b>${hud.key('grenade')}</b> 施放职业技能二 · F 施放技能一`,
     `在空中再次按 <b>${hud.key('jump')}</b> 可二段跳`,
   ];
   const bossFor = (n) => BOSSES[(Math.floor(n / 5) - 1) % BOSSES.length];
@@ -220,7 +220,7 @@ export function createWaves(ctx, pickups, focus, prefs) {
     if (info.source === 'katana' || info.source === 'focus') {
       game.katanaStreak++;
       player.weapons[player.katanaIndex].addBlood(0.42);
-      if (game.katanaStreak >= focus.chargeKills) focus.enter();
+      if (!ctx.profile && game.katanaStreak >= focus.chargeKills) focus.enter();
     } else if (info.source !== 'blast') game.katanaStreak = 0;
     if (info.source === 'deflect') {
       label = '反弹击杀';

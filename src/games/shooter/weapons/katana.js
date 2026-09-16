@@ -1,3 +1,4 @@
+import { power } from '../character.js';
 import * as THREE from 'three';
 import { makeInkMaterial, INK } from '../render.js';
 import { rand, clamp, damp, lerp } from '../util.js';
@@ -199,8 +200,8 @@ export class Katana extends ViewModel {
       any = true;
       const point = h.enemy.center.clone();
       point.y += rand(-0.2, 0.4);
-      if (!ctx.exploration)
-        ctx.enemies.damage(h.enemy, this.damage, {
+      if (!ctx.pvp?.enabled)
+        ctx.enemies.damage(h.enemy, this.damage * power(ctx.profile) * (P.counter ? 1.5 : 1), {
           point,
           dir: _v2.clone(),
           part: 'torso',
@@ -209,6 +210,7 @@ export class Katana extends ViewModel {
           slashDir: s,
         });
     }
+    P.counter = false;
     for (const br of ctx.breakablesInArc(P.eye, P.forward, 3.2, Math.cos(1.0))) {
       any = true;
       ctx.breakHit(br, this.damage, br.pos.clone(), _v2.clone());
@@ -223,6 +225,11 @@ export class Katana extends ViewModel {
     }
   }
   onDeflect(perfect) {
+    if (perfect) {
+      this.ctx.player.counter = true;
+      const exploration = this.ctx.exploration;
+      if (exploration?.isHost) exploration.players.get(exploration.selfId).counter = true;
+    }
     this.parrySwing = 1;
     this.parryDir = -this.parryDir;
     this.recoilRot.kick(perfect ? -3.5 : -2, this.parryDir * 2, this.parryDir * 2.5);

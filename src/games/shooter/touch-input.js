@@ -9,6 +9,7 @@ const ACTIONS = new Set([
   'grenade',
   'melee',
   'dash',
+  'interact',
   'reload',
   'sprint',
   'score',

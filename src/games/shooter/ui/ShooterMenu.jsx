@@ -1,3 +1,4 @@
+import { CLASSES, EQUIPMENT, SLOTS, STATS } from '../character.js';
 import { useEffect, useRef, useState } from 'react';
 import { Settings } from './Settings.jsx';
 import { Controls } from './Controls.jsx';
@@ -40,15 +41,43 @@ export function ShooterMenu({ view }) {
             {kind === 'dead' && ` · 击败 ${kills} 名敌人`}
           </h2>
         )}
+        {view.profile && (
+          <p>
+            {CLASSES[view.profile.role].name} · Lv.{view.profile.level} · 生命 {view.profile.stats.health} ·
+            武器 {view.profile.stats.weapon} · 技能 {view.profile.stats.skill} · 防护{' '}
+            {view.profile.stats.armor}
+            {view.trialCharacter ? ' · 临时试用，不保存成长' : ' · 训练不发成长奖励'}
+          </p>
+        )}
+        {kind === 'start' &&
+          view.trialCharacter &&
+          Object.entries(SLOTS).map(([slot, label]) => (
+            <label className="character-equipment" key={slot}>
+              {label}
+              <select
+                value={view.trialCharacter.equipment[slot]}
+                onChange={(e) => actions.trialEquip(e.target.value)}
+              >
+                {view.trialCharacter.inventory
+                  .filter((id) => EQUIPMENT[id].slot === slot)
+                  .map((id) => (
+                    <option key={id} value={id}>
+                      {EQUIPMENT[id].name} · {STATS[EQUIPMENT[id].stat]} +{EQUIPMENT[id].value}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          ))}
         <div className="mainbtns">
           {kind === 'start' ? (
             <>
               <button className="start" ref={firstButton} onClick={actions.explore}>
                 开始开放世界<i>自由探索 · 合作战斗</i>
               </button>
+              <button onClick={actions.character}>角色与装备</button>
               <button onClick={actions.online}>联机对战</button>
               <button className="solo" onClick={() => actions.begin(1)}>
-                单人模式
+                个人训练场
               </button>
             </>
           ) : (

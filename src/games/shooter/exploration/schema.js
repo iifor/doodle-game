@@ -424,7 +424,12 @@ export function validateProgress(p, total = p?.total ?? 4) {
     typeof p.rewarded === 'boolean' && (!p.rewarded || p.defeated.length === total),
     '奖励进度无效',
   );
+  requireWorld(
+    p.powered === undefined || (typeof p.powered === 'boolean' && (!p.powered || p.rewarded)),
+    '供电任务状态无效',
+  );
   return {
+    ...(p.powered !== undefined ? { powered: p.powered } : {}),
     defeated: [...p.defeated].sort((a, b) => a - b),
     rewarded: p.rewarded,
     ...(p.total !== undefined || total !== 4 ? { total } : {}),

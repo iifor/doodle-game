@@ -245,7 +245,7 @@ export class HUD {
     this.el.wave.parentElement.hidden = on;
     this.el.left.parentElement.hidden = on;
   }
-  setOnlineScores(players, selfId) {
+  setOnlineScores(players, selfId, room) {
     this.root.classList.toggle('online', players.length > 0);
     const sorted = [...players].sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
     this.el.pvpscore.replaceChildren();
@@ -255,12 +255,14 @@ export class HUD {
     this.el.left.parentElement.hidden = players.length > 0;
     for (const container of [this.el.pvpscore, this.el.board]) {
       const title = document.createElement('div');
-      title.textContent = '自由混战 · 20 杀获胜';
+      title.textContent = room?.teamsEnabled
+        ? `红队 ${room.teamScores[0]} : ${room.teamScores[1]} 蓝队 · 全队 20 杀获胜`
+        : '自由混战 · 20 杀获胜';
       container.append(title);
       for (const p of sorted) {
         const row = document.createElement('div');
         row.className = p.id === selfId ? 'row me' : 'row';
-        row.textContent = `${p.name}${p.id === selfId ? '（你）' : ''} · ${p.kills} 杀 / ${p.deaths} 阵亡`;
+        row.textContent = `${p.team ? (p.team === 1 ? '[红队] ' : '[蓝队] ') : ''}${p.name}${p.id === selfId ? '（你）' : ''} · ${p.kills} 杀 / ${p.assists ?? 0} 助攻 / ${p.deaths} 阵亡`;
         container.append(row);
       }
     }

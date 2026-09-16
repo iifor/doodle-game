@@ -1,11 +1,26 @@
+import { advanceGrenade } from '../online/combat.js';
+import { progressionEvents, canRestorePower } from './progression.js';
+import { armorDamage, power, WEAPON_IDS, validateProfile } from '../character.js';
+import {
+  bladeRecovering,
+  absorbBarrier,
+  GUARD_WINDOW,
+  GUARD_RECOVERY,
+  GUARD_DAMAGE,
+  castAbility,
+  tickAbilities,
+  launchShell,
+  resetAbilities,
+  weaponPower,
+} from '../abilities.js';
 import { BuildingScenes } from './scenes.js';
 import { dynamicScene } from './interiors.js';
 import { PLOTS, outdoors, buildingAt, doorPosition, sceneOf, validateWorldLayout } from './region.js';
 import * as THREE from 'three';
 import { Transport } from '../online/transport.js';
 import { RemotePlayer, encodeLocal } from '../online/remote-player.js';
-import { validateName } from '../online/protocol.js';
-import { INK } from '../render.js';
+import { validateName, validShellId } from '../online/protocol.js';
+import { INK, makeInkMaterial } from '../render.js';
 import { SEE_THROUGH, makeBody } from '../physics.js';
 import { disposeTree } from '../../../shared/resources.js';
 import { Chunks } from './chunks.js';
@@ -33,6 +48,14 @@ import { WorldAPI, Packets, validateActor } from './network.js';
 const nearby = (a, b, radius = 1) => Math.abs(a.cx - b.cx) <= radius && Math.abs(a.cz - b.cz) <= radius;
 const freshProgress = () => ({ defeated: [], rewarded: false });
 const actorData = (p) => ({
+  profile: p.profile,
+  energy: p.energy,
+  skillAt: p.skillAt,
+  slowUntil: p.slowUntil,
+  focusUntil: p.focusUntil,
+  barrier: p.barrier,
+  barrierUntil: p.barrierUntil,
+  chargedAt: p.chargedAt,
   id: p.id,
   name: p.name,
   ink: p.ink,
@@ -98,9 +121,9 @@ export class Exploration {
         }
       : {};
     this.net = new Transport({
-      prefix: 'doodle-world-v2-',
+      prefix: 'doodle-world-v3-',
       peerOptions,
-      onJoin: (id, name) => this.addGuest(id, name),
+      onJoin: (id, name, profile) => this.addGuest(id, name, profile),
       onLeave: (id) => {
         this.players.delete(id);
         this.removeRemote(id);
@@ -241,27 +264,31 @@ export class Exploration {
     this.chunks = new Chunks(this.ctx);
     this.scenes = new BuildingScenes(this);
     this.reset();
-    this.ctx.player.maxHp = 110;
-    this.ctx.player.hp = 110;
+    this.ctx.player.configure(this.ctx.profile);
+    this.ctx.player.hp = this.ctx.player.maxHp;
     this.ctx.player.yaw = info.schemaVersion === 2 ? 0.6 : 0;
     this.ctx.player._updateCamera(0);
     this.stage = 'ready';
     this.ctx.game.state = 'worldReady';
   }
-  newActor(id, name, pos) {
+  newActor(id, name, pos, profile) {
     validateName(name);
+    if (profile) validateProfile(profile);
     return {
       id,
       name,
+      profile: profile ? structuredClone(profile) : undefined,
+      energy: 100,
+      skillAt: [-100, -100],
       ink: allocateInk(this.players?.values() ?? []),
       pos,
       yaw: 0,
       pitch: 0,
-      weapon: 0,
+      weapon: profile ? WEAPON_IDS.indexOf(profile.weapon) : 0,
       flags: 64,
       velocity: [0, 0, 0],
       hook: null,
-      hp: 110,
+      hp: profile?.stats.health ?? 110,
       life: 1,
       sceneId: this.scenes ? 'outdoor' : undefined,
       epoch: 0,
@@ -300,7 +327,10 @@ export class Exploration {
       this.progress = data.progress;
       this.manifest = new Set(data.manifest);
       this.attach(data.info);
-      this.players.set(this.selfId, this.newActor(this.selfId, playerName, this.progress.safePosition));
+      this.players.set(
+        this.selfId,
+        this.newActor(this.selfId, playerName, this.progress.safePosition, this.ctx.profile),
+      );
       this.heartbeat = setInterval(() => {
         void this.api.call(`/${this.info.id}/lease`, 'POST', { renew: true }).catch((e) => {
           this.started = false;
@@ -362,7 +392,7 @@ export class Exploration {
     this.error = '';
     this.render();
     try {
-      await this.net.open({ code, name });
+      await this.net.open({ code, name, profile: this.ctx.profile });
       this.selfId = this.net.id;
     } catch (error) {
       this.report(error.message);
@@ -371,9 +401,9 @@ export class Exploration {
       this.render();
     }
   }
-  addGuest(id, name) {
+  addGuest(id, name, profile) {
     requireWorld(this.isHost && this.info, '房主尚未打开世界');
-    const record = this.newActor(id, name, { cx: 0, cz: 0, x: 64, y: 0, z: 64 });
+    const record = this.newActor(id, name, { cx: 0, cz: 0, x: 64, y: 0, z: 64 }, profile);
     this.players.set(id, record);
     this.packets.post(id, 'world', {
       info: this.info,
@@ -471,9 +501,38 @@ export class Exploration {
       this.requests.delete(keyOf(b.x, b.z));
       this.render();
     } else if (type === 'snapshot') this.applySnapshot(data);
-    else if (type === 'grenade') {
+    else if (type === 'precision') this.ctx.player.precisionReload = true;
+    else if (type === 'ability') {
+      requireWorld(
+        [0, 1].includes(data.index) && data.role === this.players.get(data.id)?.profile?.role,
+        '技能事件无效',
+      );
+      for (const key of ['origin', 'end']) validAddress(data[key]);
+      if (data.move) validAddress(data.move);
+      this.ctx.player.showAbility({
+        ...data,
+        origin: this.chunks.position(data.origin).toArray(),
+        end: this.chunks.position(data.end).toArray(),
+        move: data.id === this.selfId && data.move ? this.chunks.position(data.move).toArray() : null,
+      });
+    } else if (type === 'shell-burst') {
       validAddress(data.pos);
-      this.ctx.player.throwGrenade({ pos: this.chunks.position(data.pos).toArray(), vel: data.vel });
+      requireWorld(validShellId(data.shellId), '炮弹爆炸事件无效');
+      this.ctx.player.burstShell({ ...data, pos: this.chunks.position(data.pos).toArray() });
+    } else if (type === 'grenade') {
+      validAddress(data.pos);
+      requireWorld(data.shellId === undefined || validShellId(data.shellId), '炮弹事件无效');
+      requireWorld(
+        Array.isArray(data.vel) &&
+          data.vel.length === 3 &&
+          data.vel.every((v) => Number.isFinite(v) && Math.abs(v) <= 70),
+        '投射物速度无效',
+      );
+      this.ctx.player.throwGrenade({
+        shellId: data.shellId,
+        pos: this.chunks.position(data.pos).toArray(),
+        vel: data.vel,
+      });
     } else throw new Error('未知世界消息');
   }
   packLocal() {
@@ -493,6 +552,7 @@ export class Exploration {
   }
   acceptState(p, state) {
     validateActor(state, this.info);
+    requireWorld(!p.profile || WEAPON_IDS[state.weapon] === p.profile.weapon, '职业武器不可切换');
     requireWorld(state.id === p.id, '玩家身份不匹配');
     if (this.scenes && state.epoch !== p.epoch) return;
     if (this.scenes)
@@ -643,11 +703,31 @@ export class Exploration {
       r.tryDeflect = (projectile) => {
         const player = this.players.get(p.id),
           time = this.ctx.game.time;
-        if (!this.isHost || !player || !(player.flags & 4) || (player.blockUntil ?? 0) > time) return false;
+        if (
+          !this.isHost ||
+          !player ||
+          projectile.blast ||
+          !(player.flags & 4) ||
+          (player.blockUntil ?? 0) > time
+        )
+          return false;
         if (projectile.vel.clone().normalize().negate().dot(r.forward) < 0.55) return false;
-        player.blockUntil = time + 0.19;
-        const perfect = time - (player.blockSince ?? -1) < 0.26;
-        return { ret: perfect || Math.random() < 0.35, perfect };
+        player.blockUntil = time + GUARD_RECOVERY;
+        const perfect = time - (player.blockSince ?? -1) < GUARD_WINDOW;
+        if (perfect) player.counter = true;
+        if (!perfect) this.damagePlayer(p.id, projectile.dmg * GUARD_DAMAGE, projectile.origin);
+        return { ret: perfect, perfect };
+      };
+      r.tryBlockMelee = (enemy) => {
+        const actor = this.players.get(p.id);
+        const blocked =
+          this.isHost &&
+          actor?.profile?.role === 'blade' &&
+          !!(actor.flags & 4) &&
+          this.ctx.game.time - (actor.blockSince ?? -1) < GUARD_WINDOW &&
+          enemy.center.clone().sub(r.eye).normalize().dot(r.forward) > 0.35;
+        if (blocked) actor.counter = true;
+        return blocked;
       };
       this.remotes.set(p.id, r);
     }
@@ -660,6 +740,11 @@ export class Exploration {
       r.lastState = p;
       r.lastStateAt = p.at;
     }
+    r.setCombatState(
+      p,
+      this.ctx.game.time + (this.isHost ? 0 : (this.combatClockOffset ?? 0)),
+      performance.now() / 1000,
+    );
     r.update(dt, performance.now() / 1000);
     if (this.isHost) {
       // Enemy hits use the accepted position; interpolation only controls drawing.
@@ -780,7 +865,12 @@ export class Exploration {
           ? { run: { buildingId: b.id, runId: enemy.runId, defeated, rewarded: defeated.length === 4 } }
           : {
               chunk: key.split(',').map(Number),
-              state: { defeated, rewarded: defeated.length === total, ...(total !== 4 ? { total } : {}) },
+              state: {
+                ...this.stateFor(key),
+                defeated,
+                rewarded: defeated.length === total,
+                ...(total !== 4 ? { total } : {}),
+              },
             };
       },
       (old, current) => {
@@ -853,6 +943,7 @@ export class Exploration {
     requireWorld(Number.isFinite(amount) && amount >= 0, '伤害无效');
     const p = this.players.get(id);
     if (!p?.active || p.hp <= 0 || (p.shieldUntil ?? 0) > this.ctx.game.time) return;
+    amount = armorDamage(absorbBarrier(p, amount, this.ctx.game.time), p.profile);
     p.hp = Math.max(0, p.hp - amount);
     p.hurtAt = this.ctx.game.time;
     if (id === this.selfId) {
@@ -910,7 +1001,7 @@ export class Exploration {
           sceneId: this.scenes ? 'outdoor' : undefined,
           epoch: (p.epoch ?? 0) + 1,
           transition: null,
-          hp: 110,
+          hp: p.profile?.stats.health ?? 110,
           life: p.life + 1,
           seq: 0,
           grenades: 3,
@@ -920,6 +1011,8 @@ export class Exploration {
           shieldUntil: this.ctx.game.time + 2,
           at: performance.now(),
         });
+        resetAbilities(p);
+        p.fields = [];
         if (p.id === this.selfId) {
           this.ctx.player.reset(this.chunks.position(point));
           if (this.ctx.game.state === 'dying') this.ctx.game.state = this.ctx.game.menu ? 'pause' : 'play';
@@ -956,6 +1049,9 @@ export class Exploration {
       dirs: dirs.map((d) => d.toArray()),
     });
   }
+  skill(index) {
+    this.sendAction('skill', { index });
+  }
   melee() {
     this.sendAction('melee');
   }
@@ -963,8 +1059,14 @@ export class Exploration {
     this.sendAction('grenade', { pos: this.chunks.address(new THREE.Vector3(...data.pos)), vel: data.vel });
   }
   fall() {
-    if (this.isHost) this.damagePlayer(this.selfId, 110);
-    else this.sendAction('fall');
+    if (this.isHost) {
+      const self = this.players.get(this.selfId);
+      self.barrier = 0;
+      this.damagePlayer(
+        this.selfId,
+        (this.players.get(this.selfId)?.hp ?? 110) / armorDamage(1, this.ctx.profile),
+      );
+    } else this.sendAction('fall');
   }
   take() {
     /* World supplies are awarded only by saved outpost completion. */
@@ -987,9 +1089,22 @@ export class Exploration {
       Math.sin(p.pitch),
       -Math.cos(p.yaw) * Math.cos(p.pitch),
     );
-    if (a.action === 'shot') {
+    if (a.action === 'skill') {
+      requireWorld([0, 1].includes(a.index), '技能编号无效');
+      const arena = this.abilityArena(p);
+      castAbility(arena, p, a.index);
+      p.fields = arena.fields;
+    } else if (a.action === 'power') {
+      const key = keyOf(p.pos.cx, p.pos.cz),
+        item = this.chunks.loaded.get(key);
+      if (canRestorePower(item?.block, this.stateFor(key), p.pos))
+        void this.save(() => ({
+          chunk: key.split(',').map(Number),
+          state: { ...this.stateFor(key), powered: true },
+        }));
+    } else if (a.action === 'shot') {
       const weapon = Object.hasOwn(GUNS, a.kind) && GUNS[a.kind];
-      requireWorld(weapon && ['rifle', 'shotgun', 'sniper'][p.weapon] === a.kind, '射击武器无效');
+      requireWorld(weapon && WEAPON_IDS[p.weapon] === a.kind, '射击武器无效');
       validAddress(a.origin);
       requireWorld(Array.isArray(a.dirs) && a.dirs.length === weapon.pellets, '弹道数量无效');
       const origin = this.chunks.position(a.origin);
@@ -1004,17 +1119,26 @@ export class Exploration {
         );
       if (time - p.shotAt < Math.max(weapon.interval, weapon.cycleDur ?? 0) * 0.8) return;
       p.shotAt = time;
+      if (a.kind === 'cannon') {
+        const arena = this.abilityArena(p);
+        launchShell(arena, p);
+        return;
+      }
       for (const values of a.dirs) {
         const dir = new THREE.Vector3(...values),
           wall = this.ctx.world.raycast(origin, dir, 300, SEE_THROUGH);
         const hit = this.ctx.enemies.raycast(origin, dir, wall ? wall.dist : 300);
         if (hit && (!this.scenes || hit.enemy.sceneId === p.sceneId)) {
-          let damage = weapon.damage * (hit.part === 'head' ? weapon.headMul : 1);
+          let damage = weapon.damage * weaponPower(p, time) * (hit.part === 'head' ? weapon.headMul : 1);
           if (weapon.falloff)
             damage *= Math.max(
               weapon.falloff[2],
               Math.min(1, 1 - (hit.dist - weapon.falloff[0]) / (weapon.falloff[1] - weapon.falloff[0])),
             );
+          if (hit.part === 'head' && p.profile?.role === 'gunner') {
+            if (id === this.selfId) this.ctx.player.precisionReload = true;
+            else this.packets.post(id, 'precision', {});
+          }
           this.ctx.enemies.damage(hit.enemy, damage, {
             point: hit.point,
             dir,
@@ -1025,12 +1149,13 @@ export class Exploration {
         }
       }
     } else if (a.action === 'melee') {
-      if (time - p.meleeAt < 0.3) return;
+      requireWorld(!p.profile || p.profile.role === 'blade', '职业不能拔刀');
+      if (bladeRecovering(p, time) || time - p.meleeAt < (p.profile ? 0.33 : 0.3)) return;
       p.meleeAt = time;
       for (const hit of this.ctx.enemies.inArc(eye, forward, 3, Math.cos(0.95))) {
         if (this.scenes && hit.enemy.sceneId !== p.sceneId) continue;
         if (!this.ctx.world.hasLineOfSight(eye, hit.enemy.center, SEE_THROUGH)) continue;
-        this.ctx.enemies.damage(hit.enemy, 75, {
+        this.ctx.enemies.damage(hit.enemy, 75 * power(p.profile) * (p.counter ? 1.5 : 1), {
           point: hit.enemy.center,
           dir: forward,
           part: 'torso',
@@ -1038,7 +1163,9 @@ export class Exploration {
           crit: false,
         });
       }
+      p.counter = false;
     } else if (a.action === 'grenade') {
+      requireWorld(!p.profile, '请使用职业技能');
       validAddress(a.pos);
       const pos = this.chunks.position(a.pos);
       requireWorld(
@@ -1066,11 +1193,95 @@ export class Exploration {
         return;
       p.yankAt = time;
       this.ctx.enemies.yank(enemy, eye, true);
-    } else if (a.action === 'fall') this.damagePlayer(id, 110);
-    else throw new Error('未知战斗动作');
+    } else if (a.action === 'fall') {
+      p.barrier = 0;
+      this.damagePlayer(id, p.hp / armorDamage(1, p.profile));
+    } else throw new Error('未知战斗动作');
+  }
+  abilityArena(p, sceneId = p.sceneId) {
+    const session = this;
+    p.snap = [
+      ...this.chunks.position(p.pos).toArray(),
+      p.yaw,
+      p.pitch,
+      p.weapon,
+      p.flags,
+      p.hp,
+      ...p.velocity,
+    ];
+    const targets = [
+      ...(!this.scenes || sceneId === p.sceneId ? [p] : []),
+      ...this.ctx.enemies.enemies
+        .filter((e) => e.alive && (!this.scenes || e.sceneId === sceneId))
+        .map((e) => ({
+          id: e.id,
+          enemy: e,
+          active: true,
+          hp: e.hp,
+          snap: [...e.body.pos.toArray(), e.yaw, 0, 0, 64, e.hp, 0, 0, 0],
+          get slowUntil() {
+            return e.slowUntil ?? 0;
+          },
+          set slowUntil(v) {
+            e.slowUntil = v;
+          },
+        })),
+    ];
+    return {
+      time: this.ctx.game.time,
+      world: this.ctx.world,
+      targets,
+      fields: p.fields ?? [],
+      grenades: this.grenades,
+      damage(target, amount) {
+        if (target.id === p.id) session.damagePlayer(p.id, amount);
+        else
+          session.ctx.enemies.damage(target.enemy, amount, {
+            point: target.enemy.center.clone(),
+            dir: new THREE.Vector3(0, 1, 0),
+            source: 'skill',
+            part: 'torso',
+            crit: false,
+          });
+      },
+      emit(event) {
+        if (event.type === 'grenade' || event.type === 'shell-burst') {
+          if (event.type === 'grenade') session.grenades.at(-1).sceneId = sceneId;
+          const packet = { ...event, pos: session.chunks.address(new THREE.Vector3(...event.pos)) };
+          for (const other of session.players.values())
+            if (other.id !== session.selfId && other.sceneId === sceneId)
+              session.packets.post(other.id, event.type, packet);
+          if (session.players.get(session.selfId).sceneId === sceneId) {
+            if (event.type === 'grenade') session.ctx.player.throwGrenade(event);
+            else session.ctx.player.burstShell(event);
+          }
+        } else {
+          if (event.move) {
+            p.pos = session.chunks.address(new THREE.Vector3(...event.move));
+            p.velocity = [0, 0, 0];
+            p.at = performance.now();
+          }
+          const packet = {
+            ...event,
+            origin: session.chunks.address(new THREE.Vector3(...event.origin)),
+            end: session.chunks.address(new THREE.Vector3(...event.end)),
+            move: event.move ? p.pos : null,
+          };
+          for (const other of session.players.values())
+            if (other.id !== session.selfId && other.sceneId === p.sceneId)
+              session.packets.post(other.id, 'ability', packet);
+          if (session.players.get(session.selfId).sceneId === p.sceneId)
+            session.ctx.player.showAbility({ ...event, move: p.id === session.selfId ? event.move : null });
+        }
+      },
+    };
   }
   updateGrenades(dt) {
     for (const g of this.grenades) {
+      if (g.profile && this.players.has(g.owner)) {
+        advanceGrenade(this.abilityArena(this.players.get(g.owner), g.sceneId), g, dt);
+        continue;
+      }
       g.fuse -= dt;
       g.vel.y -= 22 * dt;
       const delta = g.vel.clone().multiplyScalar(dt),
@@ -1091,7 +1302,7 @@ export class Exploration {
             distance < 6.4 &&
             this.ctx.world.hasLineOfSight(g.pos, e.center, SEE_THROUGH)
           )
-            this.ctx.enemies.damage(e, 120 * (1 - (distance / 6.4) * 0.6), {
+            this.ctx.enemies.damage(e, (g.damage ?? 120) * (1 - (distance / 6.4) * 0.6), {
               point: e.center,
               dir: e.center.clone().sub(g.pos).normalize(),
               source: 'blast',
@@ -1134,6 +1345,7 @@ export class Exploration {
       .map((c) => ({ key: c.key, state: this.stateFor(c.key) }));
     return {
       revision: ++this.snapshotRevision,
+      time: this.ctx.game.time,
       sceneId: p.sceneId,
       epoch: p.epoch,
       players: [...this.players.values()].map(actorData),
@@ -1151,6 +1363,10 @@ export class Exploration {
     };
   }
   applySnapshot(s) {
+    requireWorld(
+      s.time === undefined || (Number.isFinite(s.time) && s.time >= 0 && s.time <= Number.MAX_SAFE_INTEGER),
+      '世界时钟无效',
+    );
     requireWorld(
       this.info &&
         Number.isSafeInteger(s.revision) &&
@@ -1172,7 +1388,7 @@ export class Exploration {
       requireWorld(
         Number.isFinite(p.hp) &&
           p.hp >= 0 &&
-          p.hp <= 110 &&
+          p.hp <= (p.profile?.stats.health ?? 110) &&
           Number.isSafeInteger(p.life) &&
           p.life > 0 &&
           Number.isSafeInteger(p.reward) &&
@@ -1190,6 +1406,7 @@ export class Exploration {
       return;
     this.appliedLife ??= this.players.get(this.selfId).life;
     this.players = new Map(s.players.map((p) => [p.id, p]));
+    this.combatClockOffset = (s.time ?? this.ctx.game.time) - this.ctx.game.time;
     this.progress.generationPaused = s.generationPaused;
     requireWorld(typeof s.error === 'string' && s.error.length <= 500, '生成状态无效');
     this.error = s.error;
@@ -1279,6 +1496,12 @@ export class Exploration {
   }
   applyHealth(self) {
     const player = this.ctx.player;
+    player.inkEnergy = self.energy ?? 100;
+    player.focusUntil = self.focusUntil ?? 0;
+    player.barrier = self.barrier ?? 0;
+    player.barrierUntil = self.barrierUntil ?? 0;
+    player.slowUntil = self.slowUntil ?? 0;
+    if (self.skillAt) player.skillTimes = [...self.skillAt];
     if (self.hp < player.hp) {
       this.applyingDamage = true;
       try {
@@ -1384,12 +1607,19 @@ export class Exploration {
         (this.chunks.origin[1] - oldOrigin[1]) * SIZE,
       );
       for (const g of this.grenades) g.pos.sub(shift);
+      for (const p of this.players.values()) for (const f of p.fields ?? []) f.pos.sub(shift);
       if (this.isHost) {
         this.spawnOutposts();
         this.updateGrenades(dt);
         for (const p of this.players.values()) {
+          if (p.profile && p.active) {
+            const arena = this.abilityArena(p);
+            tickAbilities(arena, dt);
+            p.fields = arena.fields;
+          }
           if (p.respawnAt !== null && p.respawnAt <= this.ctx.game.time) this.respawn(p);
-          if (p.hp > 0 && this.ctx.game.time - p.hurtAt > 4.5) p.hp = Math.min(110, p.hp + 11 * dt);
+          if (p.hp > 0 && this.ctx.game.time - p.hurtAt > 4.5)
+            p.hp = Math.min(p.profile?.stats.health ?? 110, p.hp + armorDamage(11 * dt, p.profile));
           if (p.id !== this.selfId) this.remote(p, dt);
         }
         for (const e of this.ctx.enemies.enemies) {
@@ -1417,9 +1647,64 @@ export class Exploration {
     if (this.tickT <= 0) {
       this.tickT = 0.5;
       this.maintain();
+      this.progression();
       this.updateHUD();
     }
     this.chunks.visible(this.ctx.player.body.pos);
+  }
+  progression() {
+    if (!this.started || !this.ctx.player.alive) return;
+    const position = this.chunks.address(this.ctx.player.body.pos),
+      key = keyOf(position.cx, position.cz);
+    const item = this.chunks.loaded.get(key),
+      state = this.stateFor(key);
+    if (!item) return;
+    if (this.ctx.characterStore && !this.ctx.trial) {
+      for (const event of progressionEvents(this.info, item.block, state, position)) {
+        try {
+          const receipt = this.ctx.characterStore.reward(event);
+          if (receipt)
+            this.ctx.hud.tip(
+              `成长已保存 · 经验 +${receipt.xp}${receipt.point ? ' · 属性点 +1' : ''}${receipt.loot ? ' · 获得装备' : ''}`,
+              4,
+            );
+        } catch (error) {
+          this.report(`角色奖励未保存：${error.message}`);
+          break;
+        }
+      }
+    }
+    if (this.players.get(this.selfId)?.sceneId !== 'outdoor') {
+      this.questHint = '';
+      return;
+    }
+    const station = item.block.layout.outpost?.center;
+    if (!station) {
+      this.questHint = '任务：探索街区，寻找供电站';
+      return;
+    }
+    if (!item.powerMarker) {
+      item.powerMarker = new THREE.Mesh(
+        new THREE.OctahedronGeometry(0.7),
+        makeInkMaterial({ ink: INK.ORANGE }),
+      );
+      item.powerMarker.position.set(station[0], 2, station[1]);
+      item.root.add(item.powerMarker);
+    }
+    item.powerMarker.material.uniforms.uInk.value = state.powered ? INK.GREEN : INK.ORANGE;
+    item.powerMarker.rotation.y = this.ctx.game.time;
+    item.powerMarker.scale.setScalar(state.powered ? 0.5 : 1);
+    const distance = Math.round(Math.hypot(position.x - station[0], position.z - station[1]));
+    this.questHint = state.powered
+      ? '供电已恢复 · 住宅已开放'
+      : `恢复供电：供电站 ${distance} 米（${station.join(', ')}） · ${state.rewarded ? '靠近橙色标记，按 E 恢复' : '清理街区敌人后恢复供电'}`;
+  }
+  restorePower() {
+    const p = this.chunks.address(this.ctx.player.body.pos),
+      key = keyOf(p.cx, p.cz);
+    if (!canRestorePower(this.chunks.loaded.get(key)?.block, this.stateFor(key), p)) return false;
+    this.sendAction('power');
+    return true;
   }
   updateHUD() {
     if (!this.info || !this.chunks) return;
@@ -1430,6 +1715,7 @@ export class Exploration {
         this.chunks.loaded.get(key);
     const state = this.stateFor(key);
     this.label.textContent = `${item?.block.layout.name ?? '探索边界'} · ${item?.block.layout.interior ? `室内${item.block.layout.outpost ? ` · 第 ${state.runId} 轮` : ''}` : key}\n${key === '0,0' ? '安全营地' : item?.block.layout.interior && !item.block.layout.outpost ? '安全建筑' : outpostComplete(state) ? '据点已清理' : `据点 ${state?.defeated.length ?? 0}/${item?.block.layout.outpost?.spawns.length ?? state?.total ?? 4}`} · ${this.unsaved.length || this.hostStatus?.unsaved ? '未保存，请打开菜单重试' : this.saving || this.hostStatus?.saving ? '正在保存' : '已保存'}${this.requests.size || this.hostStatus?.generating ? '\n前方区域正在绘制…' : ''}${this.error ? `\n${this.error}` : ''}${this.scenes?.hint ? `\n${this.scenes.hint}` : ''}`;
+    if (this.questHint) this.label.textContent += `\n${this.questHint}`;
     const c = this.map.getContext('2d');
     if (this.info.schemaVersion === 2) {
       c.fillStyle = '#fffdf2';

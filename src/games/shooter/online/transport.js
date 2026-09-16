@@ -1,3 +1,4 @@
+import { validateProfile } from '../character.js';
 import {
   MAX_PLAYERS,
   ROOM_PREFIX,
@@ -23,10 +24,11 @@ export class Transport {
     this.peer = null;
     this.connected = false;
   }
-  async open({ name, code, isPublic = false }) {
+  async open({ name, code, isPublic = false, profile }) {
     this.close();
     const generation = this.generation;
     validateName(name);
+    if (profile) validateProfile(profile);
     if (code !== undefined) validateCode(code);
     this.isHost = code === undefined;
     this.isPublic = isPublic;
@@ -60,7 +62,7 @@ export class Transport {
           const conn = this.peer.connect(this.prefix + code, {
             reliable: true,
             serialization: 'json',
-            metadata: { v: VERSION, name },
+            metadata: { v: VERSION, name, profile },
           });
           this.pending.add(conn);
           conn.on('data', (message) => {
@@ -158,12 +160,13 @@ export class Transport {
       try {
         requireValue(conn.metadata?.v === VERSION, '客户端版本不兼容');
         validateName(conn.metadata.name);
+        if (conn.metadata.profile) validateProfile(conn.metadata.profile);
         requireValue(this.connections.size < MAX_PLAYERS - 1, '房间已满（最多 10 人）');
         requireValue(!this.connections.has(conn.peer), '重复连接');
         this.connections.set(conn.peer, { conn, last: Date.now(), count: 0, since: Date.now() });
         this.wire(conn);
         this.sendTo(conn.peer, { type: 'welcome' });
-        this.onJoin(conn.peer, conn.metadata.name);
+        this.onJoin(conn.peer, conn.metadata.name, conn.metadata.profile);
       } catch (error) {
         conn.send({ v: VERSION, type: 'refused', reason: error.message });
         // Allow the refusal to enter the reliable channel before closing it.

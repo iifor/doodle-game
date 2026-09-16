@@ -82,6 +82,7 @@ export class BuildingScenes {
   }
   request(reset = false) {
     const s = this.s;
+    if (!reset && s.restorePower?.()) return;
     if (s.isHost) Object.assign(s.players.get(s.selfId), s.packLocal());
     const p = s.players.get(s.selfId);
     if (!p?.active || p.hp <= 0) return;
@@ -121,6 +122,17 @@ export class BuildingScenes {
       return;
     }
     const b = portal.building;
+    if (p.sceneId === 'outdoor' && !data.reset) {
+      const key = keyOf(p.pos.cx, p.pos.cz),
+        block = s.chunks.loaded.get(key)?.block;
+      const locked = this.dynamic
+        ? enterableBuildings(block)[0]?.id === b.id
+        : PLOTS.find((item) => item.cx === p.pos.cx && item.cz === p.pos.cz)?.id === b.id;
+      requireWorld(
+        !locked || !block?.layout.outpost || s.stateFor(key).powered,
+        '建筑停电：清理街区敌人，前往供电站按 E 恢复供电',
+      );
+    }
     if (this.dynamic && data.reset) return;
     if (data.reset) {
       requireWorld(sceneOf(p.pos) === 'outdoor' && b.templateId === 'warehouse', '请在仓库门外重置挑战');
@@ -236,6 +248,8 @@ export class BuildingScenes {
       if (p.transition === pending) p.transition = null;
       return;
     }
+    p.fields = [];
+    p.chargedAt = null;
     p.pos = pending.target;
     p.sceneId = this.scene(p.pos);
     p.epoch = pending.epoch;

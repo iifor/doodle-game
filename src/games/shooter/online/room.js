@@ -1,6 +1,6 @@
 import { Transport } from './transport.js';
 import { Match } from './match.js';
-import { validateRoom, requireValue, vector, WEAPONS } from './protocol.js';
+import { validateRoom, requireValue, vector, WEAPONS, validShellId } from './protocol.js';
 
 function peerOptions() {
   const host = import.meta.env.VITE_PEER_HOST;
@@ -22,8 +22,8 @@ export class Room {
     this.seq = 0;
     this.net = new Transport({
       peerOptions: peerOptions(),
-      onJoin: (id, name) => {
-        this.model.add(id, name);
+      onJoin: (id, name, profile) => {
+        this.model.add(id, name, profile);
         this.publish();
       },
       onLeave: (id) => {
@@ -54,12 +54,14 @@ export class Room {
           code: this.net.code,
           isPublic: this.net.isPublic,
           ...arena,
+          npcsEnabled: options.npcsEnabled ?? false,
+          teamsEnabled: options.teamsEnabled ?? false,
           emit: (event) => {
             this.net.broadcast({ type: 'event', event });
             this.onEvent(event);
           },
         });
-        this.model.add(this.net.id, options.name);
+        this.model.add(this.net.id, options.name, options.profile);
         this.publish();
         let last = performance.now();
         this.clock = setInterval(() => {
@@ -100,13 +102,25 @@ export class Room {
             e.ends.every((v) => vector(v, 450)),
           '弹道事件无效',
         );
-      else if (e.type === 'grenade') requireValue(vector(e.pos, 110) && vector(e.vel, 70), '手雷事件无效');
-      else if (e.type === 'death')
+      else if (e.type === 'grenade')
         requireValue(
-          this.state.players.some((p) => p.id === e.by),
-          '击杀者不存在',
+          vector(e.pos, 110) && vector(e.vel, 70) && (e.shellId === undefined || validShellId(e.shellId)),
+          '手雷事件无效',
         );
-      else requireValue(e.type === 'parry', '未知战斗事件');
+      else if (e.type === 'shell-burst')
+        requireValue(vector(e.pos, 450) && validShellId(e.shellId), '炮弹爆炸事件无效');
+      else if (e.type === 'ability')
+        requireValue(
+          [0, 1].includes(e.index) &&
+            e.role === this.state.players.find((p) => p.id === e.id)?.profile?.role &&
+            vector(e.origin, 110) &&
+            vector(e.end, 450) &&
+            (e.move === null || vector(e.move, 110)),
+          '技能事件无效',
+        );
+      else if (e.type === 'death')
+        requireValue(e.by === null || this.state.players.some((p) => p.id === e.by), '击杀者不存在');
+      else requireValue(['parry', 'precision'].includes(e.type), '未知战斗事件');
       this.onEvent(e);
     } else throw new Error('联机协议错误：未知房主消息');
   }
@@ -129,6 +143,21 @@ export class Room {
     const state = this.model.snapshot();
     this.net.broadcast({ type: 'room', room: state });
     this.apply(state);
+  }
+  configureNpcs(enabled) {
+    requireValue(this.net.isHost && this.model, '仅房主可配置 NPC');
+    this.model.configureNpcs(enabled);
+    this.publish();
+  }
+  configureTeams(enabled) {
+    requireValue(this.net.isHost && this.model, '仅房主可配置队伍');
+    this.model.configureTeams(enabled);
+    this.publish();
+  }
+  setTeam(id, team) {
+    requireValue(this.net.isHost && this.model, '仅房主可调整队伍');
+    this.model.setTeam(id, team);
+    this.publish();
   }
   start() {
     requireValue(this.net.isHost && this.model, '仅房主可开始对局');

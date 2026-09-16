@@ -5,3 +5,4 @@ coverage/
 *.local
 world-data/
 .env
+.playwright-cli/

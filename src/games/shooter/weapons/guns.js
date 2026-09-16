@@ -1,3 +1,4 @@
+import { launchShell, weaponPower } from '../abilities.js';
 import * as THREE from 'three';
 import { makeInkMaterial, INK } from '../render.js';
 import { SEE_THROUGH } from '../physics.js';
@@ -15,7 +16,7 @@ export const GUNS = {
     reserve: 175,
     maxReserve: 350,
     interval: 1 / 11,
-    damage: 24,
+    damage: 20,
     headMul: 2.6,
     pellets: 1,
     spread: 0.016,
@@ -77,7 +78,7 @@ export const GUNS = {
     reserve: 25,
     maxReserve: 50,
     interval: 0.2,
-    damage: 150,
+    damage: 90,
     headMul: 3,
     pellets: 1,
     spread: 0.075,
@@ -100,6 +101,37 @@ export const GUNS = {
     moveSpread: 0.004,
     cycleDur: 0.85,
   },
+};
+
+GUNS.cannon = {
+  ...GUNS.rifle,
+  name: '榴弹炮',
+  kind: 'cannon',
+  hint: '碰撞爆破 · F 蓄力炮击 · G 震荡弹',
+  magSize: 4,
+  reserve: 40,
+  maxReserve: 80,
+  interval: 1.1,
+  damage: 85,
+  pellets: 1,
+  headMul: 1,
+  reloadDur: 2,
+  auto: false,
+  sound: 'shotgunFire',
+};
+GUNS.staff = {
+  ...GUNS.rifle,
+  name: '墨能法杖',
+  kind: 'staff',
+  hint: '墨能射线 · F 法阵 · G 闪现',
+  magSize: 20,
+  reserve: 200,
+  maxReserve: 400,
+  interval: 0.3,
+  damage: 36,
+  pellets: 1,
+  headMul: 1.5,
+  auto: true,
 };
 
 export class Gun extends ViewModel {
@@ -157,6 +189,8 @@ export class Gun extends ViewModel {
   }
   startReload() {
     if (this.reloading || this.mag >= this.magSize || this.reserve <= 0) return;
+    this.reloadBoost = this.ctx.player.precisionReload ? 1 / 0.7 : 1;
+    this.ctx.player.precisionReload = false;
     this.reloading = true;
     this.reloadT = 0;
     this.racked = false;
@@ -211,7 +245,7 @@ export class Gun extends ViewModel {
       }
     }
     if (this.reloading) {
-      this.reloadT += dt;
+      this.reloadT += dt * (this.reloadBoost ?? 1);
       if (this.reloadType === 'mag') {
         const t = this.reloadT / this.reloadDur;
         const tilt =
@@ -291,11 +325,16 @@ export class Gun extends ViewModel {
       P = ctx.player;
     this.fireT = this.interval;
     this.mag--;
-    const spreadNow = this.spreadCur;
+    const spreadNow = this.spreadCur * (P.focusUntil > ctx.game.time ? 0.3 : 1);
     this.spreadCur = Math.min(this.spreadCur + this.spreadKick, this.spreadMax);
     let hits = 0;
     const directions = Array.from({ length: this.pellets }, () => P.aimDir(spreadNow).clone());
-    for (const direction of directions) if (this.fireRay(P.eye, direction)) hits++;
+    if (this.kind === 'cannon') {
+      if (!ctx.pvp?.enabled) {
+        P.training.update(0);
+        launchShell(P.training, P.training.actor);
+      }
+    } else for (const direction of directions) if (this.fireRay(P.eye, direction)) hits++;
     ctx.pvp?.shot(this.kind, P.eye, directions);
     // fx
     this.flash.visible = true;
@@ -357,8 +396,9 @@ export class Gun extends ViewModel {
           this.falloff[2],
           1,
         );
-      if (!ctx.exploration)
-        ctx.enemies.damage(hitE.enemy, d, {
+      if (crit && P_ROLE(ctx) === 'gunner' && !ctx.pvp?.enabled) ctx.player.precisionReload = true;
+      if (!ctx.pvp?.enabled)
+        ctx.enemies.damage(hitE.enemy, d * weaponPower(ctx.player, ctx.game.time), {
           point: hitE.point,
           dir,
           part: hitE.part,
@@ -503,5 +543,37 @@ export class Sniper extends Gun {
     this.ejectPt.position.set(0.06, 0.04, 0.06);
     g.add(this.ejectPt);
     this.flash = makeFlash(g, 0, 0.02, -1.6, 1);
+  }
+}
+
+const P_ROLE = (ctx) => ctx.profile?.role;
+export class Cannon extends Gun {
+  constructor(ctx) {
+    super(ctx, 'cannon');
+  }
+  build() {
+    Rifle.prototype.build.call(this);
+    this.root.scale.setScalar(1.2);
+    cyl(0.09, 0.65, 0, 0.02, -0.65, this.dark, this.root);
+  }
+}
+export class Staff extends Gun {
+  constructor(ctx) {
+    super(ctx, 'staff');
+  }
+  build() {
+    const g = this.root;
+    cyl(0.035, 1.1, 0, 0, -0.4, this.mat, g);
+    sph(0.13, 0, 0, -1, this.mat, g, 10);
+    this.magMesh = new THREE.Object3D();
+    this.magY = 0;
+    g.add(this.magMesh);
+    this.muzzle = new THREE.Object3D();
+    this.muzzle.position.set(0, 0, -1.1);
+    g.add(this.muzzle);
+    this.ejectPt = this.muzzle;
+    this.shell = null;
+    this.flash = makeFlash(g, 0, 0, -1.1, 1);
+    hand(this.mat, 0, -0.1, 0, g, [0, 0, 0]);
   }
 }

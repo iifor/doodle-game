@@ -4,7 +4,17 @@ export function createScreens(ctx, prefs, actions, onScreen) {
   function show(next, error = '') {
     kind = next;
     hud.setGameplayVisible(false);
-    onScreen({ kind, error, wave: game.wave, score: game.score, kills: game.kills, prefs, actions });
+    onScreen({
+      profile: ctx.profile,
+      trialCharacter: ctx.trialCharacter,
+      kind,
+      error,
+      wave: game.wave,
+      score: game.score,
+      kills: game.kills,
+      prefs,
+      actions,
+    });
   }
   return {
     start() {

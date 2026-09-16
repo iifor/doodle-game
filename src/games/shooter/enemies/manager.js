@@ -281,7 +281,9 @@ export class EnemyManager {
       this.ctx.hud.hitmarker(false, false);
       return;
     }
-    amount *= this.mods.damage;
+    if (!this.ctx.profile) amount *= this.mods.damage;
+    if (this.ctx.profile && !this.ctx.pvp?.enabled)
+      this.ctx.hud.tip(`训练伤害 ${amount.toFixed(1)}${info.crit ? ' · 精准命中' : ''}`, 1.2);
     e.hp -= amount;
     e.flinch = 1;
     e.flashT = 0.07;
@@ -602,7 +604,7 @@ export class EnemyManager {
     dx /= l;
     dz /= l;
     const a = (b.onGround ? accel : accel * 0.3) * dt;
-    speed *= this.mods.speed;
+    speed *= this.mods.speed * (e.slowUntil > this.ctx.game.time ? 0.55 : 1);
     b.vel.x += clamp(dx * speed - b.vel.x, -a, a);
     b.vel.z += clamp(dz * speed - b.vel.z, -a, a);
     e.yawT = Math.atan2(dx, dz);
@@ -1211,7 +1213,9 @@ export class EnemyManager {
       b.vel.multiplyScalar(Math.max(0, 1 - 4 * dt));
       return;
     }
-    _d.divideScalar(l).multiplyScalar(speed * this.mods.speed);
+    _d.divideScalar(l).multiplyScalar(
+      speed * this.mods.speed * (e.slowUntil > this.ctx.game.time ? 0.55 : 1),
+    );
     _v3.subVectors(_d, b.vel);
     const m = _v3.length();
     if (m > accel * dt) _v3.multiplyScalar((accel * dt) / m);

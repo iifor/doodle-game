@@ -1342,3 +1342,54 @@ canvas#c {
   font-size: 18px;
   padding: 3px 12px;
 }
+
+.character-panel {
+  max-height: 92dvh;
+  overflow: auto;
+}
+.character-panel input,
+.character-panel select {
+  font: inherit;
+  padding: 6px;
+  max-width: 100%;
+}
+.character-panel input[type='number'] {
+  width: 6em;
+}
+.character-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+.character-stats > div {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: center;
+  border: 1px solid currentColor;
+  padding: 8px;
+}
+.character-equipment {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 10px 0;
+}
+.character-panel button[aria-pressed='true'] {
+  background: #202328;
+  color: white;
+}
+.role-status {
+  position: absolute;
+  bottom: 115px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  background: #fffdf2e6;
+  color: #202328;
+  text-align: center;
+  width: max-content;
+  max-width: 90%;
+  font-size: 13px;
+}

@@ -1,3 +1,4 @@
+import { validateProfile, validateCombatState } from '../character.js';
 import { sceneOf } from './region.js';
 import { requireWorld, validAddress } from './schema.js';
 import { validCharacterInk } from '../colors.js';
@@ -7,6 +8,8 @@ export function validateActor(p, info) {
     p && typeof p.id === 'string' && p.id.length <= 100 && typeof p.name === 'string' && p.name.length <= 14,
     '玩家身份无效',
   );
+  if (p.profile) validateProfile(p.profile);
+  validateCombatState(p);
   validAddress(p.pos);
   requireWorld(p.ink === undefined || validCharacterInk(p.ink), '玩家颜色无效');
   if (p.sceneId !== undefined)
@@ -21,7 +24,7 @@ export function validateActor(p, info) {
       Math.abs(p.pitch) <= 1.6 &&
       Number.isInteger(p.weapon) &&
       p.weapon >= 0 &&
-      p.weapon <= 3 &&
+      p.weapon <= 5 &&
       Number.isInteger(p.flags) &&
       p.flags >= 0 &&
       p.flags <= 4095,

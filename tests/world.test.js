@@ -523,7 +523,7 @@ test('enemy arrivals are staggered by proximity and do not respawn defeated enem
 
 test('guest snapshots render every encounter weapon and accept heavy enemy health', () => {
   const session = Object.create(Exploration.prototype);
-  const ctx = { scene: new THREE.Scene(), effects: { strokeBurst() {} } };
+  const ctx = { game: { time: 2 }, scene: new THREE.Scene(), effects: { strokeBurst() {} } };
   ctx.enemies = new EnemyManager(ctx);
   const pos = { cx: 1, cz: 0, x: 64, y: 0, z: 64 };
   Object.assign(session, {
@@ -552,7 +552,17 @@ test('guest snapshots render every encounter weapon and accept heavy enemy healt
     yaw: 0,
   }));
   try {
-    session.applySnapshot({ revision: 1, players: [p], enemies, bullets: [], chunks: [], error: '' });
+    session.applySnapshot({
+      revision: 1,
+      time: 102,
+      players: [p],
+      enemies,
+      bullets: [],
+      chunks: [],
+      error: '',
+    });
+    assert.equal(session.combatClockOffset, 100, 'late joiners render effects against the host clock');
+    assert.throws(() => session.applySnapshot({ time: Infinity }), /世界时钟无效/);
     assert.deepEqual(
       ctx.enemies.enemies.map((e) => e.T.weapon),
       ['rifle', 'blade', 'shotgun', 'sniper', 'pistol'],
@@ -1177,4 +1187,37 @@ test('repeated long-distance travel unloads geometry while retaining explored me
   }
   assert.equal(session.manifest.size, 12);
   session.chunks.dispose();
+});
+
+test('restored power survives reload, cannot regress, and recovers a once-only character reward after reconnect', async (t) => {
+  const { createCharacterStore } = await import('../src/games/shooter/character.js');
+  const { progressionEvents } = await import('../src/games/shooter/exploration/progression.js');
+  const { store, info } = await storeFor(t);
+  const block = await store.ensure(info.id, 1, 0, 'host');
+  const state = { defeated: [0, 1, 2, 3], rewarded: true };
+  await store.update(info.id, 'host', { revision: 0, chunk: [1, 0], state });
+  await store.update(info.id, 'host', { revision: 1, chunk: [1, 0], state: { ...state, powered: true } });
+  const restored = (await store.progress(info.id)).chunks['1,0'];
+  assert.equal(restored.powered, true);
+  await assert.rejects(store.update(info.id, 'host', { revision: 2, chunk: [1, 0], state }), /回退/);
+  const storage = new Map(),
+    character = createCharacterStore({
+      getItem: (k) => storage.get(k),
+      setItem: (k, v) => storage.set(k, v),
+    });
+  character.create('blade');
+  const events = progressionEvents(info, block, restored, { cx: 1, cz: 0, x: 64, y: 0, z: 64 });
+  for (const e of events) character.reward(e, () => 0.9);
+  const before = character.read();
+  for (const e of progressionEvents(info, block, (await store.progress(info.id)).chunks['1,0'], {
+    cx: 1,
+    cz: 0,
+    x: 64,
+    y: 0,
+    z: 64,
+  }))
+    assert.equal(character.reward(e), null);
+  assert.deepEqual(character.read(), before);
+  assert.equal(before.xp, 235);
+  assert.ok(before.inventory.includes('blade-weapon-1'));
 });

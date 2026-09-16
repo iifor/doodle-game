@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { Room } from './room.js';
 import { RemotePlayer, encodeLocal } from './remote-player.js';
 import { INK } from '../render.js';
-import { rayPlayer } from './combat.js';
+import { rayPlayer, allied } from './combat.js';
 
 export class Multiplayer {
   constructor(ctx, { setArena, reset, show, resume, exit, settings, prefs, pickups }) {
@@ -16,7 +16,12 @@ export class Multiplayer {
     this.life = 0;
     this.supplies = 0;
     this.room = new Room({
-      arena: () => ({ world: ctx.world, spawns: ctx.level.arenaSpawns, pickupSpots: ctx.level.pickups }),
+      arena: () => ({
+        world: ctx.world,
+        nav: ctx.nav,
+        spawns: ctx.level.arenaSpawns,
+        pickupSpots: ctx.level.pickups,
+      }),
       onChange: (state) => this.apply(state),
       onEvent: (event) => this.event(event),
       onError: (error) => {
@@ -55,7 +60,7 @@ export class Multiplayer {
     this.error = '';
     this.render();
     try {
-      await this.room.connect(options);
+      await this.room.connect({ ...options, profile: this.ctx.profile });
     } catch (error) {
       if (generation === this.generation) {
         console.error('[联机]', error);
@@ -93,6 +98,9 @@ export class Multiplayer {
       prefs: this.prefs,
       actions: {
         connect: (options) => this.connect(options),
+        configureNpcs: (enabled) => this.room.configureNpcs(enabled),
+        configureTeams: (enabled) => this.room.configureTeams(enabled),
+        setTeam: (id, team) => this.room.setTeam(id, team),
         start: () => this.room.start(),
         back: () => this.room.back(),
         resume: this.resume,
@@ -107,20 +115,36 @@ export class Multiplayer {
   }
   apply(state) {
     const { game, player, hud, input } = this.ctx;
+    const targets = [...state.players, ...(state.npcs ?? [])];
     for (const [id, r] of this.remotes)
-      if (!state.players.some((p) => p.id === id)) {
-        hud.kill(`${r.name} 离开了房间`, 0);
+      if (!targets.some((p) => p.id === id)) {
+        if (!id.startsWith('npc:')) hud.kill(`${r.name} 离开了房间`, 0);
         r.dispose();
         this.remotes.delete(id);
       }
-    for (const p of state.players) {
+    for (const p of targets) {
       if (p.id === this.room.net.id) continue;
       let r = this.remotes.get(p.id);
+      if (r && r.team !== (p.team ?? 0)) {
+        r.dispose();
+        this.remotes.delete(p.id);
+        r = null;
+      }
       if (!r) {
-        r = new RemotePlayer(this.ctx, p.id, p.name, 0, p.ink ?? INK.RED);
+        r = new RemotePlayer(
+          this.ctx,
+          p.id,
+          p.team ? `${p.team === 1 ? '红队' : '蓝队'} · ${p.name}` : p.name,
+          p.team ?? 0,
+          p.team
+            ? p.team === 1
+              ? INK.RED
+              : INK.BLUE
+            : (p.ink ?? (p.id.startsWith('npc:') ? INK.BLACK : INK.RED)),
+        );
         this.remotes.set(p.id, r);
       }
-      r.push(p.snap, performance.now() / 1000);
+      r.push(p.snap, performance.now() / 1000, p, state.time);
     }
     const self = state.players.find((p) => p.id === this.room.net.id);
     if (state.phase === 'match') {
@@ -136,7 +160,11 @@ export class Multiplayer {
       }
       if (this.life !== self.life) {
         const wasDying = game.state === 'dying';
-        player.maxHp = 110;
+        if (self.profile) {
+          this.ctx.profile = self.profile;
+          player.configure(self.profile);
+        }
+        player.maxHp = self.profile?.stats.health ?? 110;
         player.reset(new THREE.Vector3().fromArray(self.snap));
         player.yaw = self.snap[3];
         player.pitch = self.snap[4];
@@ -146,6 +174,12 @@ export class Multiplayer {
           hud.message('', '', 0);
         }
       }
+      player.inkEnergy = self.energy ?? 100;
+      player.focusUntil = self.focusUntil ?? 0;
+      player.barrier = self.barrier ?? 0;
+      player.barrierUntil = self.barrierUntil ?? 0;
+      player.slowUntil = self.slowUntil ?? 0;
+      if (self.skillAt) player.skillTimes = [...self.skillAt];
       if (self.hp < player.hp) player.takeDamage(player.hp - self.hp, null);
       else player.hp = self.hp;
       if (self.supplies > this.supplies) {
@@ -169,7 +203,7 @@ export class Multiplayer {
       }
       game.state = state.phase === 'over' ? 'over' : 'lobby';
     }
-    hud.setOnlineScores(state.players, this.room.net.id);
+    hud.setOnlineScores(state.players, this.room.net.id, state);
     this.render();
   }
   ready() {
@@ -196,6 +230,12 @@ export class Multiplayer {
     if (this.inMatch)
       this.room.action('shot', { kind, origin: origin.toArray(), dirs: dirs.map((d) => d.toArray()) });
   }
+  skill(index) {
+    if (this.inMatch) {
+      this.room.action('state', { snap: encodeLocal(this.ctx.player, this.ctx.player.weaponIndex) });
+      this.room.action('skill', { index });
+    }
+  }
   melee() {
     if (this.inMatch) this.room.action('melee');
   }
@@ -210,7 +250,13 @@ export class Multiplayer {
   }
   raycast(origin, dir, max) {
     if (!this.inMatch) return null;
-    return rayPlayer(this.room.state.players, origin, dir, max, this.room.net.id);
+    return rayPlayer(
+      [...this.room.state.players, ...(this.room.state.npcs ?? [])],
+      origin,
+      dir,
+      max,
+      this.room.net.id,
+    );
   }
   event(e) {
     const { player, effects, audio, hud } = this.ctx;
@@ -219,13 +265,27 @@ export class Multiplayer {
       for (const end of e.ends)
         effects.tracer(origin, new THREE.Vector3().fromArray(end), INK.RED, 0.02, 0.08);
       audio.remoteShot(e.kind, origin);
-    } else if (e.type === 'grenade' && e.id !== this.room.net.id) player.throwGrenade(e);
+    } else if (e.type === 'shell-burst') {
+      player.burstShell(e);
+    } else if (e.type === 'ability') {
+      const self = this.room.state.players.find((p) => p.id === this.room.net.id),
+        caster = this.room.state.players.find((p) => p.id === e.id),
+        friendly = e.id === this.room.net.id || (caster && self && allied(caster, self));
+      player.showAbility({
+        ...e,
+        hostile: !friendly,
+        move: e.id === this.room.net.id ? e.move : null,
+      });
+    } else if (e.type === 'precision' && e.id === this.room.net.id) {
+      player.precisionReload = true;
+    } else if (e.type === 'grenade' && (e.id !== this.room.net.id || player.profile?.role === 'cannon'))
+      player.throwGrenade(e);
     else if (e.type === 'parry') {
       if (e.id === this.room.net.id) hud.tip('成功弹反', 1);
     } else if (e.type === 'death') {
       const roster = this.room.state.players,
         victim = roster.find((p) => p.id === e.id),
-        killer = roster.find((p) => p.id === e.by);
+        killer = e.by === null ? { name: 'NPC 突袭者' } : roster.find((p) => p.id === e.by);
       if (victim && killer) hud.kill(`${killer.name} 击败了 ${victim.name}`, 0);
       if (e.by === this.room.net.id && e.id !== e.by) audio.kill(true);
     }

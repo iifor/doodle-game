@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { Match } from '../src/games/shooter/online/match.js';
 import {
+  VERSION,
   validateAction,
   validateRoom,
   validateSnap,
@@ -101,8 +102,8 @@ test('network boundaries reject malformed, oversized, version-mismatched and non
   for (const code of ['', '../../', 'abc23', 'PUB16']) assert.throws(() => validateCode(code));
   validateCode('ABC23');
   validateCode('PUB15');
-  assert.throws(() => validateFrame({ v: 2, type: 'room' }));
-  assert.throws(() => validateFrame({ v: 1, type: 'room', data: 'x'.repeat(17000) }));
+  assert.throws(() => validateFrame({ v: VERSION + 1, type: 'room' }));
+  assert.throws(() => validateFrame({ v: VERSION, type: 'room', data: 'x'.repeat(17000) }));
   assert.throws(() => validateSnap([0, 0, 0, 0, 0, 99, 64, 110, 0, 0, 0]));
   assert.throws(() => validateSnap([NaN, 0, 0, 0, 0, 0, 64, 110, 0, 0, 0]));
   assert.throws(() =>
@@ -218,7 +219,7 @@ test('melee guard and grenade damage run on the host rather than client health c
   match.tick(0.3);
   command('guest', 'state', { snap: [0, 0, 0, 0, 0, 0, 80, 110, 0, 0, 0] });
   command('host', 'melee');
-  assert.equal(guest.hp, 55);
+  assert.equal(guest.hp, 35);
   command('host', 'grenade', { pos: [0, 0.2, 1], vel: [0, 0, 0] });
   match.tick(1.8);
   assert.equal(guest.hp, 0);
@@ -231,7 +232,7 @@ test('remote avatars reject invalid weapons and release old weapon geometry', ()
   remote.push(snap, 1);
   remote.update(0.016, 1);
   assert.equal(remote.root.visible, true);
-  assert.throws(() => remote.setWeapon(4));
+  assert.throws(() => remote.setWeapon(6));
   let disposed = 0;
   remote.J.gun.traverse((o) => {
     if (o.geometry) o.geometry.addEventListener('dispose', () => disposed++);
@@ -266,7 +267,7 @@ test('transport authenticates connection identity and closes protocol violators'
   conn.send = () => {};
   transport.connections.set(conn.peer, { conn, last: Date.now(), count: 0, since: Date.now() });
   transport.wire(conn);
-  conn.emit('data', { v: 1, type: 'action', from: 'forged-host' });
+  conn.emit('data', { v: VERSION, type: 'action', from: 'forged-host' });
   assert.deepEqual(received, ['actual-peer']);
   conn.emit('data', { v: 999, type: 'action' });
   assert.equal(conn.open, false);
@@ -293,4 +294,117 @@ test('cancel during signaling rejects the pending operation and destroys the pee
   assert.equal(transport.peer, null);
   peer.emit('open');
   assert.equal(transport.connected, false);
+});
+
+test('online NPCs default off, spawn sparsely on the host and reset between rounds', () => {
+  const { match } = arena();
+  for (let i = 0; i < 30; i++) match.tick(2);
+  assert.equal(match.npcsEnabled, false);
+  assert.equal(match.npcs.length, 0);
+  match.lobby();
+  assert.throws(() => match.configureNpcs('yes'), /NPC/);
+  match.configureNpcs(true);
+  match.start();
+  assert.ok(match.npcTime >= 8 && match.npcTime <= 16);
+  for (let i = 0; i < 10; i++) match.tick(2);
+  assert.equal(match.npcs.length, 0, 'no NPCs before any player enters');
+  const host = match.players.get('host');
+  host.active = true;
+  const spots = new Set();
+  for (let i = 0; i < 12; i++) {
+    match.npcTime = 0;
+    match.tick(0);
+    assert.ok(match.npcTime >= 8 && match.npcTime <= 16);
+    assert.ok(match.npcs.length <= 4);
+    for (const n of match.npcs) {
+      spots.add(n.snap.slice(0, 3).join(','));
+      assert.ok(n.body.pos.distanceTo(new THREE.Vector3().fromArray(host.snap)) > 8);
+    }
+  }
+  assert.equal(match.npcs.length, 4);
+  assert.ok(spots.size >= 1);
+  validateRoom(match.snapshot());
+  assert.throws(() => match.configureNpcs(false), /NPC/);
+  match.finish('host');
+  assert.equal(match.npcs.length, 0);
+  match.lobby();
+  match.configureNpcs(false);
+  match.start();
+  assert.equal(match.npcs.length, 0);
+});
+
+test('NPCs chase and damage players; guns, melee and grenades kill them without PvP points', () => {
+  const { match, command, events } = arena();
+  match.npcsEnabled = true;
+  const host = match.players.get('host');
+  function spawnAt(z) {
+    match.npcs = [];
+    match.npcTime = 0;
+    match.tick(0);
+    const n = match.npcs[0];
+    n.body.pos.set(0, 0, z);
+    n.snap = [0, 0, z, 0, 0, 3, 80, 70, 0, 0, 0];
+    return n;
+  }
+  let n = spawnAt(7);
+  const before = n.body.pos.z;
+  match.tick(0.1);
+  assert.ok(n.body.pos.z > before, 'moves towards the nearest living player');
+  n = spawnAt(8.5);
+  n.cool = 0;
+  host.hp = 15;
+  match.tick(0.1);
+  assert.equal(host.hp, 0);
+  assert.deepEqual(events.at(-1), { type: 'death', id: 'host', by: null });
+  match.spawn(host);
+  command('host', 'state', { snap: [0, 0, 10, 0, 0, 0, 80, 110, 0, 0, 0] });
+  n = spawnAt(7);
+  command('host', 'shot', { kind: 'sniper', origin: [0, 1.6, 10], dirs: [[0, 0, -1]] });
+  assert.equal(n.hp, 0);
+  n = spawnAt(8);
+  n.hp = 50;
+  command('host', 'melee');
+  assert.equal(n.hp, 0);
+  n = spawnAt(7);
+  command('host', 'grenade', { pos: [0, 0.2, 8], vel: [0, 0, 0] });
+  match.tick(1.8);
+  assert.equal(n.hp, 0);
+  assert.equal(host.kills, 0);
+  validateRoom(match.snapshot());
+});
+
+test('NPC snapshots reject invalid health, identities, counts and configuration', () => {
+  const { match } = arena();
+  match.npcsEnabled = true;
+  match.npcTime = 0;
+  match.tick(0);
+  const state = match.snapshot();
+  validateRoom(state);
+  for (const mutate of [
+    (s) => {
+      s.npcsEnabled = 'true';
+    },
+    (s) => {
+      s.npcsEnabled = false;
+    },
+    (s) => {
+      s.npcs[0].hp = NaN;
+    },
+    (s) => {
+      s.npcs[0].snap[0] = Infinity;
+    },
+    (s) => {
+      s.npcs[0].id = 'host';
+    },
+    (s) => {
+      s.npcs.push(s.npcs[0]);
+    },
+    (s) => {
+      s.npcs = Array(5).fill(s.npcs[0]);
+    },
+  ]) {
+    const invalid = structuredClone(state);
+    mutate(invalid);
+    assert.throws(() => validateRoom(invalid));
+  }
 });

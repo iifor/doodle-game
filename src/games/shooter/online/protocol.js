@@ -1,19 +1,24 @@
+import { validateProfile, validateCombatState } from '../character.js';
 import { validCharacterInk } from '../colors.js';
 
-export const VERSION = 1;
+export const VERSION = 4;
 export const MAX_PLAYERS = 10;
+export const MAX_NPCS = 4;
 export const TARGET_KILLS = 20;
 export const MATCH_SECONDS = 600;
 export const MAX_HP = 110;
-export const ROOM_PREFIX = 'doodle-game-v1-';
+export const ROOM_PREFIX = 'doodle-game-v4-';
 export const WEAPONS = {
-  rifle: { damage: 19, head: 1.8, pellets: 1, interval: 1 / 11 },
+  cannon: { damage: 85, head: 1, pellets: 1, interval: 1.1 },
+  staff: { damage: 36, head: 1.5, pellets: 1, interval: 0.3 },
+  rifle: { damage: 20, head: 2.6, pellets: 1, interval: 1 / 11 },
   shotgun: { damage: 16, head: 1.6, pellets: 10, interval: 0.78 },
-  sniper: { damage: 150, head: 1.5, pellets: 1, interval: 0.85 },
+  sniper: { damage: 90, head: 3, pellets: 1, interval: 0.85 },
 };
 export function requireValue(ok, message) {
   if (!ok) throw new Error(`联机协议错误：${message}`);
 }
+export const validShellId = (id) => typeof id === 'string' && /^[0-9a-f-]{36}$/.test(id);
 export const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 export const finite = (v, min, max) => Number.isFinite(v) && v >= min && v <= max;
 export const integer = (v, min = 0, max = Number.MAX_SAFE_INTEGER) =>
@@ -50,9 +55,9 @@ export function validateSnap(s, bound = 100) {
   requireValue(
     finite(s[3], -1e7, 1e7) &&
       finite(s[4], -1.6, 1.6) &&
-      integer(s[5], 0, 3) &&
+      integer(s[5], 0, 5) &&
       integer(s[6], 0, 4095) &&
-      finite(s[7], 0, MAX_HP),
+      finite(s[7], 0, Number.MAX_SAFE_INTEGER),
     '玩家状态字段不正确',
   );
   requireValue(
@@ -87,6 +92,9 @@ export function validateAction(a) {
       break;
     case 'take':
       requireValue(integer(a.id, 1), '补给编号不正确');
+      break;
+    case 'skill':
+      requireValue(integer(a.index, 0, 1), '技能编号无效');
       break;
     case 'ready':
     case 'melee':
@@ -124,6 +132,18 @@ export function validateRoom(s) {
       s.players.length <= MAX_PLAYERS,
     '房间人数不正确',
   );
+  requireValue(
+    typeof s.teamsEnabled === 'boolean' &&
+      Array.isArray(s.teamScores) &&
+      s.teamScores.length === 2 &&
+      s.teamScores.every((n) => integer(n)) &&
+      [null, 1, 2].includes(s.winnerTeam),
+    '队伍状态无效',
+  );
+  requireValue(
+    s.teamsEnabled || (s.winnerTeam === null && s.teamScores.every((n) => n === 0)),
+    '混战队伍状态无效',
+  );
   const ids = new Set();
   for (const p of s.players) {
     requireValue(
@@ -133,12 +153,16 @@ export function validateRoom(s) {
     ids.add(p.id);
     validateName(p.name);
     requireValue(p.ink === undefined || validCharacterInk(p.ink), '玩家颜色无效');
+    if (p.profile) validateProfile(p.profile);
+    validateCombatState(p);
     validateSnap(p.snap);
     requireValue(
-      integer(p.kills) &&
+      (s.teamsEnabled ? [1, 2].includes(p.team) : p.team === 0) &&
+        integer(p.assists) &&
+        integer(p.kills) &&
         integer(p.deaths) &&
         integer(p.life, 1) &&
-        finite(p.hp, 0, MAX_HP) &&
+        finite(p.hp, 0, p.profile?.stats.health ?? MAX_HP) &&
         typeof p.active === 'boolean' &&
         finite(p.shield, 0, 2) &&
         finite(p.respawn, 0, 2.5) &&
@@ -152,6 +176,26 @@ export function validateRoom(s) {
   for (const p of s.pickups) {
     requireValue(object(p) && integer(p.id, 1) && !pickupIds.has(p.id) && vector(p.pos, 100), '补给无效');
     pickupIds.add(p.id);
+  }
+  requireValue(s.npcsEnabled === undefined || typeof s.npcsEnabled === 'boolean', 'NPC 配置无效');
+  const npcs = s.npcs ?? [];
+  requireValue(
+    Array.isArray(npcs) && npcs.length <= MAX_NPCS && (s.npcsEnabled || !npcs.length),
+    'NPC 数量无效',
+  );
+  for (const n of npcs) {
+    requireValue(
+      object(n) &&
+        typeof n.id === 'string' &&
+        /^npc:[1-9][0-9]*$/.test(n.id) &&
+        n.id.length <= 100 &&
+        !ids.has(n.id),
+      'NPC 身份无效',
+    );
+    ids.add(n.id);
+    validateName(n.name);
+    validateSnap(n.snap);
+    requireValue(finite(n.hp, 0, 70) && n.hp > 0 && n.active === true && n.snap[7] === n.hp, 'NPC 生命无效');
   }
   return s;
 }
