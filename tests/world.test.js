@@ -32,6 +32,12 @@ import { disposeTree } from '../src/shared/resources.js';
 import { randomizeEncounter } from '../src/games/shooter/exploration/encounters.js';
 import { ENCOUNTER_TYPES, validateProgress } from '../src/games/shooter/exploration/schema.js';
 import { TYPES } from '../src/games/shooter/enemies/types.js';
+import {
+  CHAPTER_STEPS,
+  chapterPower,
+  chapterSummary,
+  validateChapterPower,
+} from '../src/games/shooter/exploration/chapter.js';
 
 function layout(seed, x, z) {
   const roads = exits(seed, x, z).flatMap(([a, b]) =>
@@ -1220,4 +1226,95 @@ test('restored power survives reload, cannot regress, and recovers a once-only c
   assert.deepEqual(character.read(), before);
   assert.equal(before.xp, 235);
   assert.ok(before.inventory.includes('blade-weapon-1'));
+});
+
+test('new-world chapter persists its staged encounters and completion across restart and late joins', async (t) => {
+  const { store, directory, info: legacy } = await storeFor(t);
+  assert.equal(chapterPower(legacy, {}), null, 'legacy layouts do not acquire a new chapter');
+  const info = await store.create('重燃街区', 1, true);
+  store.claim(info.id, 'host');
+  let progress = await store.progress(info.id);
+  const blocks = [];
+  for (const step of CHAPTER_STEPS) {
+    const [x, z] = step.key.split(',').map(Number);
+    const block = await store.ensure(info.id, x, z, 'host');
+    assert.deepEqual(block.layout.outpost.types, step.enemies);
+    blocks.push(block);
+  }
+  const finished = (block) => ({
+    total: block.layout.outpost.spawns.length,
+    defeated: block.layout.outpost.spawns.map((_, i) => i),
+    rewarded: true,
+    powered: true,
+  });
+  await assert.rejects(
+    store.update(info.id, 'host', {
+      revision: progress.revision,
+      chunk: [2, -1],
+      state: finished(blocks[3]),
+    }),
+    /外围街区/,
+  );
+  assert.equal((await store.progress(info.id)).revision, 0);
+  for (let i = 0; i < blocks.length; i++) {
+    assert.equal(chapterSummary(chapterPower(info, progress)).next.key, CHAPTER_STEPS[i].key);
+    const b = blocks[i];
+    progress = await store.update(info.id, 'host', {
+      revision: progress.revision,
+      chunk: [b.x, b.z],
+      state: finished(b),
+    });
+  }
+  const reopened = new WorldStore(directory, () => {
+    throw Error('saved chapter must not regenerate');
+  });
+  reopened.claim(info.id, 'host');
+  assert.equal(
+    chapterSummary(chapterPower(await reopened.info(info.id), await reopened.progress(info.id))).complete,
+    true,
+  );
+  for (const block of blocks)
+    assert.deepEqual(await reopened.ensure(info.id, block.x, block.z, 'host'), block);
+
+  const host = Object.create(Exploration.prototype);
+  Object.assign(host, {
+    info,
+    isHost: true,
+    progress,
+    snapshotRevision: 0,
+    requests: new Map(),
+    saving: 0,
+    unsaved: [],
+    error: '',
+    ctx: { game: { time: 10 }, enemies: { enemies: [], projectiles: { list: [], clear() {} } } },
+    chunks: { loaded: new Map(), address: () => ({ cx: 0, cz: 0 }) },
+    players: new Map(),
+  });
+  const actor = host.newActor('guest', '队友', { cx: 0, cz: 0, x: 64, y: 0, z: 64 });
+  actor.sceneId = 'outdoor';
+  host.players.set(actor.id, actor);
+  const snapshot = host.snapshot('guest');
+  assert.deepEqual(snapshot.chunks, [], 'distant chapter state does not force chunk loading');
+  const guest = Object.create(Exploration.prototype);
+  Object.assign(guest, {
+    info,
+    isHost: false,
+    selfId: actor.id,
+    players: new Map([[actor.id, actor]]),
+    acceptedRevision: 0,
+    progress: { chunks: {} },
+    ctx: host.ctx,
+    chunks: host.chunks,
+    remotes: new Map(),
+    applyHealth() {},
+    render() {},
+  });
+  guest.applySnapshot(snapshot);
+  assert.equal(
+    chapterSummary(guest.chapterPower()).complete,
+    true,
+    'late joiner sees completed distant objectives',
+  );
+  assert.throws(() => validateChapterPower(info, [false, false, false, true]), /章节进度/);
+  assert.throws(() => validateChapterPower(info, [true, true, true, 1]), /章节进度/);
 });

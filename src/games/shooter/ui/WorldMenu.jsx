@@ -3,6 +3,7 @@ import { Settings } from './Settings.jsx';
 import { Controls } from './Controls.jsx';
 import './world.css';
 import { inkCSS, inkName } from '../colors.js';
+import { WORLD_STORY, CHAPTER_STEPS } from '../exploration/chapter.js';
 
 export function WorldMenu({ view }) {
   const {
@@ -35,13 +36,24 @@ export function WorldMenu({ view }) {
         <h1 id="world-title" ref={heading} tabIndex={-1}>
           {info?.name ?? '开放世界'}
         </h1>
-        <h2>AI 持续生成 · 自由探索 · 合作战斗</h2>
-        <p>
-          探索地标 → 清理街区 → 在供电站按 E 恢复供电 →
-          获得成长与装备、开放住宅。成长已自动保存，返回主菜单可加点换装，下次进入模式生效。
-        </p>
-        {info?.schemaVersion === 1 && (
-          <p>寻找橙色住宅门，靠近按 E 进入。首次生成室内并保存，重访读取缓存；在室内入口按 E 返回街道。</p>
+        <h2>重燃街区 · 合作探索 · 角色成长</h2>
+        {stage === 'connect' && <p>{WORLD_STORY}</p>}
+        {view.chapter && (
+          <div className="world-chapter" role="status">
+            <strong>{view.chapter.complete ? '第一章完成 · 重燃街区' : '第一章 · 重燃街区'}</strong>
+            <ol>
+              {CHAPTER_STEPS.map((step, i) => (
+                <li key={step.key}>
+                  {view.chapter.power[i] ? '已通电' : '待修复'} · {step.name}（{step.key}）
+                </li>
+              ))}
+            </ol>
+            <p>
+              {view.chapter.complete
+                ? '区域能源已恢复，补给站与住宅已开放。可保存退出、返回主菜单调整搭配，或继续自由探索。'
+                : '先修复三个外围街区，再恢复核心供电站。清理敌人后，在橙色标记处按 E。'}
+            </p>
+          </div>
         )}
         {info?.region && (
           <p>
@@ -70,7 +82,7 @@ export function WorldMenu({ view }) {
                 />
               </label>
               <button className="start" disabled={busy || !worldName.trim() || !name.trim()}>
-                创建世界
+                创建世界 · 开始第一章
               </button>
             </form>
             {worlds.length > 0 && (
@@ -107,6 +119,7 @@ export function WorldMenu({ view }) {
               </label>
               <button disabled={busy || !code.trim() || !name.trim()}>加入朋友</button>
             </form>
+            <p>第一章包含四个目标街区，从营地东侧开始，最终恢复核心供电站。完成后可继续探索。</p>
             <p>
               AI
               随探索生成新的街区、建筑与敌人据点，没有固定地图尽头。世界保存到房主电脑，朋友可用房间码加入。
@@ -154,7 +167,20 @@ export function WorldMenu({ view }) {
                   : '继续前进，发现新的街区与敌人据点'}
               </p>
             )}
-            <Controls exploration />
+            <details>
+              <summary>世界背景与玩法</summary>
+              <p>{WORLD_STORY}</p>
+              <p>
+                探索地标 → 清理街区 → 在供电站按 E 恢复供电 → 获得成长与装备、开放住宅和补给站。绿标处按 E
+                补给。成长已自动保存，返回主菜单可加点换装，下次进入模式生效。
+              </p>
+              {info?.schemaVersion === 1 && (
+                <p>
+                  寻找橙色住宅门，靠近按 E 进入。首次生成室内并保存，重访读取缓存；在室内入口按 E 返回街道。
+                </p>
+              )}
+              <Controls exploration />
+            </details>
             <Settings prefs={prefs} onChange={actions.settings} desktop />
           </>
         )}

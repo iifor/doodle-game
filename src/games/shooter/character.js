@@ -127,7 +127,29 @@ export function validateCharacter(c) {
     check(item?.slot === slot && c.inventory.includes(item.id) && item.level <= levelOf(c), '穿戴装备无效');
   }
   check(c.receipts && typeof c.receipts === 'object' && !Array.isArray(c.receipts), '奖励记录无效');
+  for (const [id, receipt] of Object.entries(c.receipts))
+    check(
+      id.length > 0 &&
+        id.length <= 240 &&
+        receipt &&
+        [25, 60, 150].includes(receipt.xp) &&
+        typeof receipt.point === 'boolean' &&
+        (receipt.loot === null || EQUIPMENT[receipt.loot]?.role === c.role),
+      '奖励记录无效',
+    );
   return c;
+}
+export function parseCharacterBackup(text) {
+  check(typeof text === 'string' && text.length <= 10 * 1024 * 1024, '备份文件过大或无效');
+  let backup;
+  try {
+    backup = JSON.parse(text);
+  } catch {
+    throw new Error('备份不是有效的 JSON 文件');
+  }
+  check(backup?.format === 'doodle-character-backup' && backup.version === 1, '角色备份格式或版本不兼容');
+  profileOf(backup.character);
+  return backup.character;
 }
 export function profileOf(c) {
   validateCharacter(c);
@@ -186,6 +208,39 @@ export function createCharacterStore(storage) {
   };
   return {
     read,
+    exportBackup() {
+      const character = read();
+      check(character, '请先创建角色');
+      return JSON.stringify({ format: 'doodle-character-backup', version: 1, character }, null, 2);
+    },
+    restoreBackup(text) {
+      const restored = parseCharacterBackup(text),
+        current = read();
+      if (current) {
+        check(
+          restored.id === current.id && restored.role === current.role,
+          '只能恢复当前角色的备份；职业不可更改',
+        );
+        check(
+          restored.xp >= current.xp &&
+            Object.keys(STATS).every((key) => restored.allocated[key] >= current.allocated[key]) &&
+            restored.points + Object.values(restored.allocated).reduce((a, b) => a + b, 0) >=
+              current.points + Object.values(current.allocated).reduce((a, b) => a + b, 0) &&
+            current.inventory.every((id) => restored.inventory.includes(id)) &&
+            Object.entries(current.receipts).every(([id, r]) => {
+              const other = restored.receipts[id];
+              return (
+                Object.hasOwn(restored.receipts, id) &&
+                other.xp === r.xp &&
+                other.point === r.point &&
+                other.loot === r.loot
+              );
+            }),
+          '备份早于当前成长或奖励记录不一致，已保留当前角色',
+        );
+      }
+      return write(restored);
+    },
     create(role, name) {
       check(!read(), '已有角色，职业不可更改');
       return write(newCharacter(role, name));

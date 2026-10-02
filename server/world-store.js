@@ -24,6 +24,7 @@ import { mkdir, readFile, readdir, open, rename, unlink } from 'node:fs/promises
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { randomizeEncounter } from '../src/games/shooter/exploration/encounters.js';
+import { WORLD_STORY, chapterPower, canPowerChapter } from '../src/games/shooter/exploration/chapter.js';
 import {
   SCHEMA,
   GENERATOR,
@@ -109,6 +110,10 @@ export class WorldStore {
       '世界存档版本不兼容，原文件已保留',
     );
     if (info.schemaVersion === 2) validateTheme(info.region);
+    requireWorld(
+      info.chapterVersion === undefined || (info.schemaVersion === 1 && info.chapterVersion === 1),
+      '章节版本不兼容',
+    );
     return info;
   }
   async create(name, version = 1, aiGenerated = false) {
@@ -132,6 +137,7 @@ export class WorldStore {
       createdAt: new Date().toISOString(),
       ...(aiGenerated ? { aiGenerated: true } : {}),
       ...(aiGenerated ? { encounterVersion: 1 } : {}),
+      ...(aiGenerated ? { chapterVersion: 1 } : {}),
     };
     let layout;
     if (version === 2) {
@@ -273,7 +279,8 @@ export class WorldStore {
           x,
           z,
         );
-        if (info.encounterVersion === 1) layout = randomizeEncounter(layout, info.seed, x, z);
+        if (info.encounterVersion === 1)
+          layout = randomizeEncounter(layout, info.seed, x, z, info.chapterVersion === 1);
         this.requireLease(id, owner);
         const block = { x, z, layout, checksum: await checksum(layout) };
         await atomicWrite(this.path(id, 'chunks', `${coordinates(x, z)}.json`), block);
@@ -512,6 +519,10 @@ export class WorldStore {
           requireWorld(block, '不能保存未生成区块的进度');
           const state = validateProgress(patch.state, block.layout.outpost?.spawns.length ?? 4),
             old = p.chunks[key];
+          if (state.powered) {
+            const info = await this.info(id);
+            requireWorld(canPowerChapter(info, key, chapterPower(info, p)), '请先恢复三个外围街区的供电');
+          }
           requireWorld(
             !old ||
               (old.defeated.every((n) => state.defeated.includes(n)) &&
@@ -629,7 +640,7 @@ export function deepSeekGenerator({
                       ? '本次只生成世界主题，顶层必须包含background字符串、name字符串、style字符串、districts数组。districts恰好两个对象，每个只有name和style字符串。'
                       : '本次生成建筑模板变化：palette只能blue/green/orange；decoration只能awning/stripes/plain；slots恰好四项，每项只能empty/shelf/crate/table。不得输出坐标或改变结构。street顶层只有name和buildings，buildings逐一保留example中的id；interior顶层只有name、sign、palette、decoration、slots，风格与context中的外观一致。'),
               },
-              { role: 'user', content: JSON.stringify({ ...design, correction }) },
+              { role: 'user', content: JSON.stringify({ ...design, worldStory: WORLD_STORY, correction }) },
             ]
           : [
               {
@@ -643,6 +654,7 @@ export function deepSeekGenerator({
                 role: 'user',
                 content: JSON.stringify({
                   chunk: [x, z],
+                  worldStory: WORLD_STORY,
                   exits: exits(seed, x, z),
                   neighbors,
                   reference,

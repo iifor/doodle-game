@@ -508,3 +508,36 @@ test('camp supplies are host-controlled, require proximity, and ignore repeated 
   await s.scenes.interact(p, { epoch: 0, seq: 3 });
   assert.equal(p.reward, 1);
 });
+
+test('restored stations provide persistent-world supplies only after power is saved and while nearby', async () => {
+  const s = sessionFixture();
+  s.info = { schemaVersion: 1 };
+  s.scenes = new BuildingScenes(s);
+  s.chunks.loaded.set('1,0', {
+    block: { x: 1, z: 0, layout: { buildings: [], outpost: { center: [50, 50] } } },
+  });
+  const p = s.newActor('host', '房主', { cx: 1, cz: 0, x: 50, y: 0, z: 50 });
+  p.active = true;
+  s.players.set(p.id, p);
+  s.progress.chunks['1,0'] = { defeated: [0, 1, 2, 3], rewarded: true };
+  await s.scenes.interact(p, { epoch: 0, seq: 1 });
+  assert.equal(p.reward, 0);
+  s.progress.chunks['1,0'].powered = true;
+  await s.scenes.interact(p, { epoch: 0, seq: 2 });
+  assert.equal(p.reward, 1);
+  await s.scenes.interact(p, { epoch: 0, seq: 3 });
+  assert.equal(p.reward, 1, 'per-player cooldown applies to repeat messages');
+  p.supplyAt = 0;
+  p.pos.x = 80;
+  await s.scenes.interact(p, { epoch: 0, seq: 4 });
+  assert.equal(p.reward, 1, 'remote supply request cannot bypass proximity');
+  p.pos.x = 50;
+  p.hp = 0;
+  await s.scenes.interact(p, { epoch: 0, seq: 5 });
+  assert.equal(p.reward, 1, 'dead players cannot collect supplies');
+  p.hp = 100;
+  s.scenes.near = () => ({ building: { id: 'nearby-door' } });
+  s.unsaved = [{}];
+  await assert.rejects(s.scenes.interact(p, { epoch: 0, seq: 6 }), /等待保存/);
+  assert.equal(p.reward, 1, 'a nearby doorway keeps entry priority over supplies');
+});

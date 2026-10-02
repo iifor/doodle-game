@@ -18,11 +18,16 @@ export class BuildingScenes {
     return sceneOf(p, this.s.info);
   }
   atSupply(p) {
+    const key = keyOf(p.pos.cx, p.pos.cz),
+      block = this.s.chunks?.loaded.get(key)?.block;
+    const point =
+      key === '0,0'
+        ? (block?.layout.supply ?? [68, 68])
+        : this.s.stateFor(key).powered
+          ? block?.layout.outpost?.center
+          : null;
     return (
-      p.sceneId === 'outdoor' &&
-      p.pos.cx === 0 &&
-      p.pos.cz === 0 &&
-      Math.hypot(p.pos.x - 68, p.pos.z - 68, p.pos.y) <= 6
+      p.sceneId === 'outdoor' && !!point && Math.hypot(p.pos.x - point[0], p.pos.z - point[1], p.pos.y) <= 6
     );
   }
   near(p, range = 6) {
@@ -369,6 +374,7 @@ export class BuildingScenes {
       this.hint = near
         ? `${near.building.title} · E ${self.sceneId === 'outdoor' ? '进入' : '返回街道'}`
         : '';
+      if (!near && this.atSupply(self)) this.hint = 'E 补充弹药与手雷（每10秒一次）';
       if (this.failed.has(near?.building.id)) this.hint += '\n上次生成失败 · E 重试';
       if (s.loading) {
         s.loading.hidden = !busy;

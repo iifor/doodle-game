@@ -9,6 +9,7 @@ import {
   armorDamage,
   validateProfile,
   WEAPON_IDS,
+  parseCharacterBackup,
 } from '../src/games/shooter/character.js';
 import { Room } from '../src/games/shooter/online/room.js';
 import { RemotePlayer } from '../src/games/shooter/online/remote-player.js';
@@ -966,4 +967,39 @@ test('PVP ability effects distinguish own, allied and hostile casts in teams and
     effects.every((e) => e[2] === INK.RED),
     'other players are hostile in free-for-all',
   );
+});
+
+test('character backups preserve identity, equipment, pity and reward receipts without rollback or partial writes', () => {
+  const source = createCharacterStore(memory());
+  source.create('mage', '旅人');
+  source.reward({ id: 'chapter:landmark', type: 'landmark' }, () => 0.8);
+  source.reward({ id: 'chapter:quest', type: 'quest' }, () => 0.01);
+  source.allocate('skill');
+  const backup = source.exportBackup();
+  assert.deepEqual(parseCharacterBackup(backup), source.read());
+  const storage = memory(),
+    restored = createCharacterStore(storage);
+  restored.restoreBackup(backup);
+  assert.deepEqual(restored.read(), source.read());
+  assert.equal(restored.reward({ id: 'chapter:quest', type: 'quest' }), null);
+  restored.reward({ id: 'chapter:elite', type: 'elite' }, () => 0.8);
+  const current = restored.read();
+  assert.throws(() => restored.restoreBackup(backup), /早于当前成长/);
+  assert.deepEqual(restored.read(), current);
+  const other = createCharacterStore(memory());
+  other.create('blade');
+  assert.throws(() => restored.restoreBackup(other.exportBackup()), /当前角色/);
+  const broken = JSON.parse(backup);
+  broken.character.receipts['chapter:quest'].point = 'yes';
+  assert.throws(() => restored.restoreBackup(JSON.stringify(broken)), /奖励记录/);
+  assert.throws(() => parseCharacterBackup('{'), /JSON/);
+  assert.throws(() => parseCharacterBackup('{"format":"wrong"}'), /格式/);
+  assert.deepEqual(restored.read(), current);
+  source.reward({ id: 'chapter:elite', type: 'elite' }, () => 0.8);
+  source.reward({ id: 'chapter:next', type: 'quest' }, () => 0.7);
+  storage.setItem = () => {
+    throw Error('disk full');
+  };
+  assert.throws(() => restored.restoreBackup(source.exportBackup()), /disk full/);
+  assert.deepEqual(restored.read(), current);
 });

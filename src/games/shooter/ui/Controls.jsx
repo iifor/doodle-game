@@ -35,7 +35,7 @@ export function Controls({ exploration = false }) {
           <p>高级组合动作可用三指以上操作。联机菜单不会暂停对局，房主切后台过久会关闭房间。</p>
         </div>
       )}
-      {exploration && <p>E 进入建筑／返回街道 · N 在仓库门外重置挑战（室内无人时）</p>}
+      {exploration && <p>E 恢复供电／补给／进出建筑 · N 在旧版仓库门外重置挑战（室内无人时）</p>}
       <div className="cols">
         {[
           ['键盘与鼠标', keyboard],

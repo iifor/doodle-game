@@ -1,5 +1,6 @@
 import { advanceGrenade } from '../online/combat.js';
 import { progressionEvents, canRestorePower } from './progression.js';
+import { chapterPower, chapterSummary, validateChapterPower, canPowerChapter } from './chapter.js';
 import { armorDamage, power, WEAPON_IDS, validateProfile } from '../character.js';
 import {
   bladeRecovering,
@@ -204,6 +205,7 @@ export class Exploration {
       kind: 'world',
       stage: this.stage,
       info: this.info,
+      chapter: chapterSummary(this.chapterPower()),
       worlds: this.worlds,
       host: this.isHost,
       roomCode: this.net.connected ? this.net.code : null,
@@ -243,6 +245,10 @@ export class Exploration {
       '世界版本不兼容',
     );
     this.info = info;
+    requireWorld(
+      info.chapterVersion === undefined || (info.schemaVersion === 1 && info.chapterVersion === 1),
+      '章节版本不兼容',
+    );
     this.ctx.enemies.clear();
     this.ctx.effects.clear();
     this.pickups.clear();
@@ -411,6 +417,7 @@ export class Exploration {
       host: actorData(this.players.get(this.selfId)),
       self: actorData(record),
       generationPaused: this.progress.generationPaused,
+      chapter: this.chapterPower(),
     });
     void this.sendChunk(id, 0, 0).catch((e) => this.report(e.message));
     this.render();
@@ -483,6 +490,7 @@ export class Exploration {
       this.selfId = data.selfId;
       this.attach(data.info);
       this.progress = { chunks: {}, runs: {}, generationPaused: data.generationPaused };
+      this.remoteChapter = validateChapterPower(this.info, data.chapter);
       for (const p of [data.self, data.host]) {
         validateActor(p, this.info);
         this.players.set(p.id, p);
@@ -775,6 +783,11 @@ export class Exploration {
             ? { total: this.chunks.loaded.get(key).block.layout.outpost.spawns.length }
             : {}),
         });
+  }
+  chapterPower() {
+    return this.isHost
+      ? chapterPower(this.info, this.progress)
+      : (this.remoteChapter ?? chapterPower(this.info, this.progress));
   }
   setState(key, state) {
     const b = this.info?.schemaVersion === 2 && buildingAt(...key.split(',').map(Number));
@@ -1097,7 +1110,10 @@ export class Exploration {
     } else if (a.action === 'power') {
       const key = keyOf(p.pos.cx, p.pos.cz),
         item = this.chunks.loaded.get(key);
-      if (canRestorePower(item?.block, this.stateFor(key), p.pos))
+      if (
+        canRestorePower(item?.block, this.stateFor(key), p.pos) &&
+        canPowerChapter(this.info, key, this.chapterPower())
+      )
         void this.save(() => ({
           chunk: key.split(',').map(Number),
           state: { ...this.stateFor(key), powered: true },
@@ -1345,6 +1361,7 @@ export class Exploration {
       .map((c) => ({ key: c.key, state: this.stateFor(c.key) }));
     return {
       revision: ++this.snapshotRevision,
+      chapter: this.chapterPower(),
       time: this.ctx.game.time,
       sceneId: p.sceneId,
       epoch: p.epoch,
@@ -1381,6 +1398,7 @@ export class Exploration {
       '世界状态无效',
     );
     if (s.revision <= this.acceptedRevision) return;
+    const chapter = validateChapterPower(this.info, s.chapter);
     this.acceptedRevision = s.revision;
     for (const p of s.players) {
       validateActor(p, this.info);
@@ -1406,6 +1424,7 @@ export class Exploration {
       return;
     this.appliedLife ??= this.players.get(this.selfId).life;
     this.players = new Map(s.players.map((p) => [p.id, p]));
+    this.remoteChapter = chapter;
     this.combatClockOffset = (s.time ?? this.ctx.game.time) - this.ctx.game.time;
     this.progress.generationPaused = s.generationPaused;
     requireWorld(typeof s.error === 'string' && s.error.length <= 500, '生成状态无效');
@@ -1674,6 +1693,11 @@ export class Exploration {
         }
       }
     }
+    const chapter = chapterSummary(this.chapterPower());
+    if (chapter?.complete && !this.chapterAnnounced) {
+      this.ctx.hud.tip(chapter.text, 10);
+      this.chapterAnnounced = true;
+    }
     if (this.players.get(this.selfId)?.sceneId !== 'outdoor') {
       this.questHint = '';
       return;
@@ -1696,13 +1720,17 @@ export class Exploration {
     item.powerMarker.scale.setScalar(state.powered ? 0.5 : 1);
     const distance = Math.round(Math.hypot(position.x - station[0], position.z - station[1]));
     this.questHint = state.powered
-      ? '供电已恢复 · 住宅已开放'
+      ? '供电已恢复 · 住宅与补给站已开放 · 绿标处按 E 补给（每10秒一次）'
       : `恢复供电：供电站 ${distance} 米（${station.join(', ')}） · ${state.rewarded ? '靠近橙色标记，按 E 恢复' : '清理街区敌人后恢复供电'}`;
   }
   restorePower() {
     const p = this.chunks.address(this.ctx.player.body.pos),
       key = keyOf(p.cx, p.cz);
     if (!canRestorePower(this.chunks.loaded.get(key)?.block, this.stateFor(key), p)) return false;
+    if (!canPowerChapter(this.info, key, this.chapterPower())) {
+      this.ctx.hud.tip('核心供电站尚未接通：请先恢复三个外围街区的供电', 4);
+      return true;
+    }
     this.sendAction('power');
     return true;
   }
@@ -1716,6 +1744,19 @@ export class Exploration {
     const state = this.stateFor(key);
     this.label.textContent = `${item?.block.layout.name ?? '探索边界'} · ${item?.block.layout.interior ? `室内${item.block.layout.outpost ? ` · 第 ${state.runId} 轮` : ''}` : key}\n${key === '0,0' ? '安全营地' : item?.block.layout.interior && !item.block.layout.outpost ? '安全建筑' : outpostComplete(state) ? '据点已清理' : `据点 ${state?.defeated.length ?? 0}/${item?.block.layout.outpost?.spawns.length ?? state?.total ?? 4}`} · ${this.unsaved.length || this.hostStatus?.unsaved ? '未保存，请打开菜单重试' : this.saving || this.hostStatus?.saving ? '正在保存' : '已保存'}${this.requests.size || this.hostStatus?.generating ? '\n前方区域正在绘制…' : ''}${this.error ? `\n${this.error}` : ''}${this.scenes?.hint ? `\n${this.scenes.hint}` : ''}`;
     if (this.questHint) this.label.textContent += `\n${this.questHint}`;
+    const chapter = chapterSummary(this.chapterPower());
+    if (chapter) {
+      this.label.textContent += `\n${chapter.text}`;
+      if (chapter.next && this.players.get(this.selfId)?.sceneId === 'outdoor') {
+        const [x, z] = chapter.next.key.split(',').map(Number);
+        const dx = (x - p.cx) * SIZE + 64 - p.x,
+          dz = (z - p.cz) * SIZE + 64 - p.z;
+        this.label.textContent +=
+          key === chapter.next.key
+            ? '\n已到目标街区：清敌后前往橙色标记恢复供电'
+            : `\n沿道路向${Math.abs(dz) > 32 ? (dz < 0 ? '北' : '南') : ''}${Math.abs(dx) > 32 ? (dx < 0 ? '西' : '东') : ''}前进 · 距目标街区中心约 ${Math.round(Math.hypot(dx, dz))} 米`;
+      }
+    }
     const c = this.map.getContext('2d');
     if (this.info.schemaVersion === 2) {
       c.fillStyle = '#fffdf2';

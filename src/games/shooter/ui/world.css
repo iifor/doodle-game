@@ -1,6 +1,23 @@
 .world-panel form {
   margin: 12px 0;
 }
+.world-chapter {
+  margin: 16px 0;
+  padding: 16px;
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  text-align: left;
+  font-size: 18px;
+  line-height: 1.6;
+}
+.world-chapter ol {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+.world-chapter p {
+  margin-bottom: 0;
+  font-size: 18px;
+}
 .exploration .hud-tl,
 .exploration .hud-tr {
   display: none;

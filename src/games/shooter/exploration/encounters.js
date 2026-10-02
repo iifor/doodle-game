@@ -1,14 +1,16 @@
 import { hash, validateLayout, requireWorld } from './schema.js';
+import { CHAPTER_STEPS } from './chapter.js';
 
 // Persist the rolled roster. Reopening a world never rerolls its enemies.
-export function randomizeEncounter(layout, seed, x, z) {
+export function randomizeEncounter(layout, seed, x, z, chapter = false) {
   if (!layout.outpost || layout.outpost.encounterVersion === 1) return layout;
   let state = hash(`${seed}:${x},${z}:encounter-v1`);
   const random = () => {
     state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
     return state / 4294967296;
   };
-  const total = 1 + Math.floor(random() * 8);
+  const roster = chapter && CHAPTER_STEPS.find((step) => step.key === `${x},${z}`)?.enemies;
+  const total = roster ? roster.length : 1 + Math.floor(random() * 8);
   const obstacles = [...layout.buildings, ...layout.cover];
   const candidates = [];
   for (const [a, b, c, d] of layout.roads) {
@@ -34,7 +36,7 @@ export function randomizeEncounter(layout, seed, x, z) {
   }
   requireWorld(spawns.length === total, '找不到足够的可通行敌人位置');
   const weapons = ['grunt', 'grunt', 'grunt', 'rusher', 'heavy', 'sniper', 'shield'];
-  const types = spawns.map(() => weapons[Math.floor(random() * weapons.length)]);
+  const types = roster ? [...roster] : spawns.map(() => weapons[Math.floor(random() * weapons.length)]);
   return validateLayout(
     { ...layout, outpost: { center: [...layout.outpost.center], spawns, encounterVersion: 1, types } },
     seed,
